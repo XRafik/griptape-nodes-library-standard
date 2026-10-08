@@ -14,7 +14,7 @@ from griptape_nodes.files.file import File
 from griptape_nodes.retained_mode.griptape_nodes import logger
 from griptape_nodes.traits.options import Options
 
-from griptape_nodes_library.llm.model_config import ModelConfig, ModelProvider
+from griptape_nodes_library.llm.model_config import cloud_model_config
 from griptape_nodes_library.llm.runner import output_to_text, prompt_model
 from griptape_nodes_library.utils.cloud_credential_utils import (
     missing_credential_error,
@@ -216,7 +216,7 @@ Return in this EXACT format with no commentary or other text:
 
 If no title is provided, just use "Segment X:" format.
 """
-        output = prompt_model(ModelConfig(provider=ModelProvider.GRIPTAPE_CLOUD, model=MODEL), msg)
+        output = prompt_model(cloud_model_config(MODEL), msg)
         output_text = output_to_text(output) if output else ""
         self.append_value_to_parameter("logs", f"Agent output: {output_text}\n")
         if not output_text:
