@@ -5,6 +5,7 @@ from typing import Any
 from griptape_nodes.exe_types.core_types import Parameter, ParameterMode
 from griptape_nodes.exe_types.node_types import ControlNode
 from griptape_nodes.exe_types.param_components.seed_parameter import SeedParameter
+from griptape_nodes.exe_types.param_types.parameter_float import ParameterFloat
 from griptape_nodes.traits.options import Options
 
 
@@ -28,19 +29,17 @@ class RandomNumber(ControlNode):
             )
         )
         self.add_parameter(
-            Parameter(
+            ParameterFloat(
                 name="minimum",
                 tooltip="Minimum value (inclusive).",
-                input_types=["int", "float"],
                 default_value=0,
                 allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
             )
         )
         self.add_parameter(
-            Parameter(
+            ParameterFloat(
                 name="maximum",
                 tooltip="Maximum value (inclusive for integers, exclusive for floats).",
-                input_types=["int", "float"],
                 default_value=100,
                 allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
             )
@@ -50,10 +49,9 @@ class RandomNumber(ControlNode):
         self._seed_parameter.add_input_parameters()
 
         self.add_parameter(
-            Parameter(
+            ParameterFloat(
                 name="result",
                 tooltip="The generated random number.",
-                output_type="float",
                 allowed_modes={ParameterMode.OUTPUT},
                 default_value=0,
             )
