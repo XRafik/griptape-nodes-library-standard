@@ -6,6 +6,7 @@ from typing import Any
 from asteval import Interpreter  # type: ignore[reportMissingImports]
 from griptape_nodes.exe_types.core_types import Parameter, ParameterMode
 from griptape_nodes.exe_types.node_types import BaseNode
+from griptape_nodes.exe_types.param_types.parameter_float import ParameterFloat
 from griptape_nodes.exe_types.param_types.parameter_int import ParameterInt
 from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
 from griptape_nodes.traits.options import Options
@@ -58,10 +59,8 @@ class MathExpression(BaseNode):
         # Add all 26 variable parameters (initially hidden based on num_variables)
         for letter in ALPHABET:
             self.add_parameter(
-                Parameter(
+                ParameterFloat(
                     name=letter,
-                    type="float",
-                    input_types=["int", "float", "bool"],
                     tooltip=f"Variable {letter.upper()} value",
                     default_value=0,
                     allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
@@ -97,10 +96,9 @@ class MathExpression(BaseNode):
 
         # Add output parameter (type will be determined by output_type setting)
         self.add_parameter(
-            Parameter(
+            ParameterFloat(
                 name="result",
                 tooltip="Result of the evaluated expression",
-                type="float",
                 allowed_modes={ParameterMode.OUTPUT},
                 default_value=0.0,
             )
