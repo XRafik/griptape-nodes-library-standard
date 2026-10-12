@@ -33,7 +33,6 @@ from griptape_nodes.node_library.library_registry import get_declared_models
 from griptape_nodes.retained_mode.events.base_events import ResultPayload
 from griptape_nodes.retained_mode.events.budget_events import (
     BudgetAccessRequest,
-    BudgetAccessResultFailure,
     BudgetAccessResultSuccess,
     ReportUsageRequest,
 )
@@ -160,7 +159,9 @@ def require_model_access_sync(
     Raises:
         RuntimeError: as `require_model_invocation_sync` does.
         BudgetExceededError: the engine's own exception, raised unwrapped so the run
-            halts with its "Budget stopped this run." message.
+            halts with its "Budget stopped this run." message. Any exception a failed
+            check carries is raised the same way.
+        RuntimeError: also when a failed check carries no exception.
     """
     require_model_invocation_sync(node, api_model_id, purpose=purpose)
     # The declaration above refused a missing model and already warned about an undeclared one.
@@ -172,8 +173,15 @@ def require_model_access_sync(
             node_type=type(node).__name__,
         )
     )
-    if isinstance(result, BudgetAccessResultFailure):
-        raise result.exception  # pyright: ignore[reportGeneralTypeIssues]
+    # Any failure stops the call, not just `BudgetAccessResultFailure`: from a worker process
+    # a refusal arrives flattened into a generic failure.
+    if result.failed():
+        exception = getattr(result, "exception", None)
+        if isinstance(exception, Exception):
+            raise exception
+        details = str(result.result_details or "").strip() or "Budget stopped this run."
+        msg = f"Cannot run {type(node).__name__}: {details}"
+        raise RuntimeError(msg)
     if isinstance(result, BudgetAccessResultSuccess):
         return result.correlation_id
     # Any other payload means the check never ran; fail open like the engine does.

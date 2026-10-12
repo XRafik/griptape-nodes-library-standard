@@ -23,6 +23,7 @@ from griptape_nodes.retained_mode.events.budget_events import (
     ReportUsageRequest,
     ReportUsageResultSuccess,
 )
+from griptape_nodes.retained_mode.events.generic_events import GenericResultFailure
 from griptape_nodes.retained_mode.events.model_events import (
     DeclareModelInvocationRequest,
     DeclareModelInvocationResultFailure,
@@ -222,6 +223,26 @@ def test_access_raises_the_engines_budget_exception_unwrapped(node: _StubNode, m
         require_model_access_sync(node, "gpt-4o")
 
     assert raised.value is exc
+
+
+def test_access_stops_on_a_flattened_refusal_carrying_the_exception(
+    node: _StubNode, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """From a worker process a refusal crosses back as a generic failure; it must still stop the call."""
+    exc = BudgetExceededError("Budget stopped this run. Studio budget is spent.", MagicMock())
+    _routing(monkeypatch, GenericResultFailure(result_details=str(exc), exception=exc))
+
+    with pytest.raises(BudgetExceededError) as raised:
+        require_model_access_sync(node, "gpt-4o")
+
+    assert raised.value is exc
+
+
+def test_access_stops_on_a_failure_without_an_exception(node: _StubNode, monkeypatch: pytest.MonkeyPatch) -> None:
+    _routing(monkeypatch, GenericResultFailure(result_details="Budget stopped this run. Studio budget is spent."))
+
+    with pytest.raises(RuntimeError, match=r"Cannot run _StubNode: Budget stopped this run\. Studio budget"):
+        require_model_access_sync(node, "gpt-4o")
 
 
 def test_access_proceeds_when_budget_was_not_checked(node: _StubNode, monkeypatch: pytest.MonkeyPatch) -> None:
