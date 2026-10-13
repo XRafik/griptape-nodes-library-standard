@@ -551,10 +551,7 @@ class CreateVideoFromFrames(SuccessFailureNode):
 
             for idx, frame_path in enumerate(frame_paths):
                 seq_path = temp_path / f"frame_{idx:04d}{detected_ext}"
-                try:
-                    self._normalize_image_for_ffmpeg(frame_path, seq_path, detected_format)
-                except Exception as e:
-                    raise RuntimeError(f"Failed to normalize frame {frame_path}: {e}") from e
+                self._normalize_image_for_ffmpeg(frame_path, seq_path, detected_format)
 
             input_pattern = str(temp_path / f"frame_%04d{detected_ext}")
             output_path = temp_path / "output.gif"
@@ -597,10 +594,7 @@ class CreateVideoFromFrames(SuccessFailureNode):
 
             for idx, frame_path in enumerate(frame_paths):
                 seq_path = temp_path / f"frame_{idx:04d}{detected_ext}"
-                try:
-                    self._normalize_image_for_ffmpeg(frame_path, seq_path, detected_format)
-                except Exception as e:
-                    raise RuntimeError(f"Failed to normalize frame {frame_path}: {e}") from e
+                self._normalize_image_for_ffmpeg(frame_path, seq_path, detected_format)
 
             input_pattern = str(temp_path / f"frame_%04d{detected_ext}")
             output_path = temp_path / f"output.{format_type}"

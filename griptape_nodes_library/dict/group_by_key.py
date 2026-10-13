@@ -65,7 +65,7 @@ class GroupByKey(DataNode):
         if isinstance(items, dict):
             items = [items]
         if not isinstance(items, list):
-            msg = f"{self.name}: items is a {type(items).__name__}, not a list of dictionaries."
+            msg = f"'Items' is a {type(items).__name__}, not a list of dictionaries."
             raise TypeError(msg)
         field = (self.get_parameter_value("group_by") or "").strip()
 

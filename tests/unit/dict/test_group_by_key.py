@@ -88,18 +88,18 @@ class TestGroupByKey:
 
     def test_json_string_that_is_not_an_object_raises(self, node: GroupByKey) -> None:
         node.parameter_values["items"] = ["[1, 2]"]
-        with pytest.raises(TypeError, match="item 0 is a list"):
+        with pytest.raises(TypeError, match="Item 0 in 'Items' is a list"):
             node.process()
 
     @pytest.mark.parametrize("items", ["null", "0", "false", "5", "true", '"text"', "not json"])
     def test_scalar_or_non_json_items_string_raises(self, node: GroupByKey, items: str) -> None:
         node.parameter_values["items"] = items
-        with pytest.raises(TypeError, match="items is a"):
+        with pytest.raises(TypeError, match="'Items' is a"):
             node.process()
 
     def test_non_json_string_item_raises(self, node: GroupByKey) -> None:
         node.parameter_values["items"] = ["{not json"]
-        with pytest.raises(TypeError, match="item 0 is a str"):
+        with pytest.raises(TypeError, match="Item 0 in 'Items' is a str"):
             node.process()
 
     def test_non_dict_item_raises(self, node: GroupByKey) -> None:
