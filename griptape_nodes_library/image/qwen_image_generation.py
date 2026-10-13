@@ -31,14 +31,20 @@ PROMPT_TRUNCATE_LENGTH = 100
 SIZE_OPTIONS = ["1328*1328", "1664*928", "1472*1140", "1140*1472", "928*1664"]
 
 # Model options
-MODEL_OPTIONS = ["qwen-image", "qwen-image-plus"]
+MODEL_OPTIONS = ["qwen-image-3.0"]
 
-# Migrates values saved before the dropdown stored the provider's own model id.
+# Migrates values saved before the dropdown stored the provider's own model id (old
+# display labels and catalog keys), plus models Alibaba has retired. Model Studio stopped
+# serving qwen-image and qwen-image-plus on 2026-10-10 and names qwen-image-3.0 as their
+# replacement, so a saved workflow referencing one migrates rather than calling through:
+# https://www.alibabacloud.com/en/notice/detail?id=2009
 LEGACY_MODEL_VALUES: dict[str, str] = {
-    "Qwen Image": "qwen-image",
-    "Qwen Image Plus": "qwen-image-plus",
-    "gtc_qwen_image": "qwen-image",
-    "gtc_qwen_image_plus": "qwen-image-plus",
+    "Qwen Image": "qwen-image-3.0",
+    "Qwen Image Plus": "qwen-image-3.0",
+    "gtc_qwen_image": "qwen-image-3.0",
+    "gtc_qwen_image_plus": "qwen-image-3.0",
+    "qwen-image": "qwen-image-3.0",
+    "qwen-image-plus": "qwen-image-3.0",
 }
 
 # Response status constants
@@ -51,10 +57,10 @@ STATUS_CONTENT_MODERATED = "Content Moderated"
 class QwenImageGeneration(GriptapeProxyNode):
     """Generate images using Qwen models via Griptape model proxy.
 
-    Documentation: https://www.alibabacloud.com/help/en/model-studio/qwen-image-api
+    Documentation: https://www.alibabacloud.com/help/en/model-studio/qwen-image-generation-and-editing-api-reference
 
     Inputs:
-        - model (str): Qwen model to use ("qwen-image" or "qwen-image-plus", default: "qwen-image")
+        - model (str): Qwen model to use (default: "qwen-image-3.0")
         - prompt (str): Text description of the desired image (max 800 characters)
         - size (str): Output image resolution (default: "1328*1328")
             Available sizes: 1328*1328 (1:1), 1664*928 (16:9), 1472*1140 (4:3), 1140*1472 (3:4), 928*1664 (9:16)
@@ -84,7 +90,7 @@ class QwenImageGeneration(GriptapeProxyNode):
             name="model",
             input_types=["str"],
             type="str",
-            default_value="qwen-image",
+            default_value="qwen-image-3.0",
             tooltip="Select the Qwen model to use",
             allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
         )
@@ -95,7 +101,7 @@ class QwenImageGeneration(GriptapeProxyNode):
             node=self,
             parameter=model_param,
             model_choices=MODEL_OPTIONS,
-            default_model="qwen-image",
+            default_model="qwen-image-3.0",
             deprecated_values=LEGACY_MODEL_VALUES,
         )
 

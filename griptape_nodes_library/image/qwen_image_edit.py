@@ -29,20 +29,24 @@ __all__ = ["QwenImageEdit"]
 PROMPT_TRUNCATE_LENGTH = 100
 
 # Model options
-MODEL_OPTIONS = [
-    "qwen-image-edit",
-    "qwen-image-edit-plus",
-    "qwen-image-edit-plus-2025-10-30",
-]
+MODEL_OPTIONS = ["qwen-image-3.0"]
 
-# Migrates values saved before the dropdown stored the provider's own model id.
+# Migrates values saved before the dropdown stored the provider's own model id (old
+# display labels and catalog keys), plus models Alibaba has retired. Model Studio stopped
+# serving every qwen-image-edit model on 2026-10-10 and names qwen-image-3.0, which
+# generates and edits through the same API, as their replacement, so a saved workflow
+# referencing one migrates rather than calling through:
+# https://www.alibabacloud.com/en/notice/detail?id=2009
 LEGACY_MODEL_VALUES: dict[str, str] = {
-    "Qwen Image Edit": "qwen-image-edit",
-    "Qwen Image Edit Plus": "qwen-image-edit-plus",
-    "Qwen Image Edit Plus (2025-10-30)": "qwen-image-edit-plus-2025-10-30",
-    "gtc_qwen_image_edit": "qwen-image-edit",
-    "gtc_qwen_image_edit_plus": "qwen-image-edit-plus",
-    "gtc_qwen_image_edit_plus_2025_10_30": "qwen-image-edit-plus-2025-10-30",
+    "Qwen Image Edit": "qwen-image-3.0",
+    "Qwen Image Edit Plus": "qwen-image-3.0",
+    "Qwen Image Edit Plus (2025-10-30)": "qwen-image-3.0",
+    "gtc_qwen_image_edit": "qwen-image-3.0",
+    "gtc_qwen_image_edit_plus": "qwen-image-3.0",
+    "gtc_qwen_image_edit_plus_2025_10_30": "qwen-image-3.0",
+    "qwen-image-edit": "qwen-image-3.0",
+    "qwen-image-edit-plus": "qwen-image-3.0",
+    "qwen-image-edit-plus-2025-10-30": "qwen-image-3.0",
 }
 
 # Response status constants
@@ -60,13 +64,10 @@ class QwenImageEdit(GriptapeProxyNode):
 
     Supports editing 1-6 input images with text instructions.
 
-    Documentation: https://www.alibabacloud.com/help/en/model-studio/qwen-image-edit-api
+    Documentation: https://www.alibabacloud.com/help/en/model-studio/qwen-image-generation-and-editing-api-reference
 
     Inputs:
-        - model (str): Qwen edit model to use (default: "qwen-image-edit-plus")
-            qwen-image-edit: Generates only 1 image
-            qwen-image-edit-plus: Generates 1-6 images
-            qwen-image-edit-plus-2025-10-30: Generates 1-6 images
+        - model (str): Qwen model to use (default: "qwen-image-3.0")
         - editing_instruction (str): Text instruction describing the desired edits (max 800 characters)
             When editing multiple images, use "Image 1", "Image 2", "Image 3" to refer to specific images
         - images (list): List of 1-6 input images to edit (required)
@@ -98,7 +99,7 @@ class QwenImageEdit(GriptapeProxyNode):
         # Model selection
         model_param = ParameterString(
             name="model",
-            default_value="qwen-image-edit-plus",
+            default_value="qwen-image-3.0",
             tooltip="Select the Qwen image editing model to use",
             allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
         )
@@ -109,7 +110,7 @@ class QwenImageEdit(GriptapeProxyNode):
             node=self,
             parameter=model_param,
             model_choices=MODEL_OPTIONS,
-            default_model="qwen-image-edit-plus",
+            default_model="qwen-image-3.0",
             deprecated_values=LEGACY_MODEL_VALUES,
         )
 
@@ -230,20 +231,12 @@ class QwenImageEdit(GriptapeProxyNode):
         if not images or len(images) == 0:
             msg = "At least 1 image is required for editing"
             raise ValueError(msg)
-        if model == "qwen-image-edit" and len(images) != 1:
-            msg = f"qwen-image-edit only supports 1 image for editing (got {len(images)} images)"
-            raise ValueError(msg)
         if len(images) > MAX_IMAGES:
             msg = f"Maximum {MAX_IMAGES} images allowed for editing (got {len(images)})"
             raise ValueError(msg)
 
         # Automatically set num_images to match the number of input images
         num_images = len(images)
-
-        # Validate num_images based on model
-        if model == "qwen-image-edit" and num_images != 1:
-            msg = f"qwen-image-edit only supports 1 image for editing (got {num_images} images)"
-            raise ValueError(msg)
 
         return {
             "model": model,

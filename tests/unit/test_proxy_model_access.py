@@ -79,8 +79,8 @@ NODE_MODEL_CASES: list[tuple[str, str, str, str]] = [
     ("WanAnimateGeneration", "gtc_wan_2_2_animate_move", "wan2.2-animate-move", "model"),
     ("WanReferenceToVideoGeneration", "gtc_wan_2_6_r2v", "wan2.6-r2v", "model"),  # only declared model
     ("FluxImageGeneration", "gtc_flux_kontext_pro", "flux-kontext-pro", "model"),  # only declared model
-    ("QwenImageGeneration", "gtc_qwen_image_plus", "qwen-image-plus", "model"),
-    ("QwenImageEdit", "gtc_qwen_image_edit", "qwen-image-edit", "model"),
+    ("QwenImageGeneration", "gtc_qwen_image_3_0", "qwen-image-3.0", "model"),  # only declared model
+    ("QwenImageEdit", "gtc_qwen_image_3_0", "qwen-image-3.0", "model"),  # only declared model
     ("SeedreamImageGeneration", "gtc_seedream_4_0", "seedream-4-0-250828", "model"),
     ("GrokImageGeneration", "gtc_grok_imagine_image", "grok-imagine-image", "model"),  # only declared model
     ("GrokImageEdit", "gtc_grok_imagine_image", "grok-imagine-image", "model"),  # only declared model
