@@ -55,7 +55,11 @@ export default function WebcamCapture(container, props) {
   let stream = null;
   let currentVideoId = "";
 
-  const MAX_DIM = 960;
+  // Ideal capture size. The browser picks the highest resolution the camera
+  // supports up to this, so 4K cameras deliver 4K and lesser ones fall back.
+  const IDEAL_WIDTH = 4096;
+  const IDEAL_HEIGHT = 2160;
+  const JPEG_QUALITY = 0.95;
 
   // ── DOM ──────────────────────────────────────────────────────────────────
 
@@ -221,8 +225,13 @@ export default function WebcamCapture(container, props) {
 
   async function startCamera() {
     try {
+      const videoConstraints = {
+        width: { ideal: IDEAL_WIDTH },
+        height: { ideal: IDEAL_HEIGHT },
+      };
+      if (currentVideoId) videoConstraints.deviceId = { exact: currentVideoId };
       const s = await navigator.mediaDevices.getUserMedia({
-        video: currentVideoId ? { deviceId: { exact: currentVideoId } } : true,
+        video: videoConstraints,
         audio: false,
       });
       stream = s;
@@ -254,15 +263,12 @@ export default function WebcamCapture(container, props) {
     if (!stream) return;
 
     const canvas = document.createElement("canvas");
-    const rawW = video.videoWidth  || 640;
-    const rawH = video.videoHeight || 480;
-    const scale = rawW > MAX_DIM || rawH > MAX_DIM ? Math.min(MAX_DIM / rawW, MAX_DIM / rawH) : 1;
-    canvas.width  = Math.round(rawW * scale);
-    canvas.height = Math.round(rawH * scale);
+    canvas.width  = video.videoWidth  || 640;
+    canvas.height = video.videoHeight || 480;
     canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
 
     // One encode — reuse for both thumbnail and binary upload
-    const dataUrl = canvas.toDataURL("image/jpeg", 0.75);
+    const dataUrl = canvas.toDataURL("image/jpeg", JPEG_QUALITY);
     const blob    = dataUrlToBlob(dataUrl);  // base64→binary in memory, no re-encode
 
     captureQueue.push(blob);

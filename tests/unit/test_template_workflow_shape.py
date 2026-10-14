@@ -39,8 +39,11 @@ def _calls_named(tree: ast.AST, name: str) -> list[ast.Call]:
 
 
 def _unique_values(tree: ast.Module) -> dict[str, Any]:
-    """Evaluate the module's `top_level_unique_values_dict` of pickled literals."""
-    for stmt in tree.body:
+    """Evaluate the module's `top_level_unique_values_dict`.
+
+    Older templates store pickled literals at module level. Newer ones store plain literals inside `build_workflow`.
+    """
+    for stmt in ast.walk(tree):
         if (
             isinstance(stmt, ast.Assign)
             and isinstance(stmt.targets[0], ast.Name)
@@ -49,8 +52,10 @@ def _unique_values(tree: ast.Module) -> dict[str, Any]:
         ):
             values = {}
             for key, value in zip(stmt.value.keys, stmt.value.values, strict=True):
-                assert isinstance(value, ast.Call)
-                values[_str_constant(key)] = pickle.loads(ast.literal_eval(value.args[0]))  # noqa: S301
+                if isinstance(value, ast.Call):
+                    values[_str_constant(key)] = pickle.loads(ast.literal_eval(value.args[0]))  # noqa: S301
+                else:
+                    values[_str_constant(key)] = ast.literal_eval(value)
             return values
     return {}
 
@@ -78,6 +83,8 @@ def _start_flow_set_values(tree: ast.Module) -> dict[str, dict[str, Any]]:
                 continue
         parameter_name = _str_constant(_keyword(call, "parameter_name"))
         value = _keyword(call, "value")
+        if isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id == "decode_value":
+            value = value.args[0]
         assert isinstance(value, ast.Subscript)
         set_values[node_name][parameter_name] = unique_values[_str_constant(value.slice)]
     return set_values
