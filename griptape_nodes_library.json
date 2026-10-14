@@ -620,34 +620,10 @@
           "dashscope": {
             "display_name": "Alibaba Cloud Model Studio",
             "models": {
-              "gtc_qwen_image": {
-                "display_name": "Qwen Image",
+              "gtc_qwen_image_3_0": {
+                "display_name": "Qwen Image 3.0",
                 "family": "Qwen",
-                "provider_model_id": "qwen-image",
-                "key_support": "SUPPORTS_CUSTOMER_KEY_OR_GRIPTAPE_KEY"
-              },
-              "gtc_qwen_image_plus": {
-                "display_name": "Qwen Image Plus",
-                "family": "Qwen",
-                "provider_model_id": "qwen-image-plus",
-                "key_support": "SUPPORTS_CUSTOMER_KEY_OR_GRIPTAPE_KEY"
-              },
-              "gtc_qwen_image_edit": {
-                "display_name": "Qwen Image Edit",
-                "family": "Qwen",
-                "provider_model_id": "qwen-image-edit",
-                "key_support": "SUPPORTS_CUSTOMER_KEY_OR_GRIPTAPE_KEY"
-              },
-              "gtc_qwen_image_edit_plus": {
-                "display_name": "Qwen Image Edit Plus",
-                "family": "Qwen",
-                "provider_model_id": "qwen-image-edit-plus",
-                "key_support": "SUPPORTS_CUSTOMER_KEY_OR_GRIPTAPE_KEY"
-              },
-              "gtc_qwen_image_edit_plus_2025_10_30": {
-                "display_name": "Qwen Image Edit Plus (2025-10-30)",
-                "family": "Qwen",
-                "provider_model_id": "qwen-image-edit-plus-2025-10-30",
+                "provider_model_id": "qwen-image-3.0",
                 "key_support": "SUPPORTS_CUSTOMER_KEY_OR_GRIPTAPE_KEY"
               },
               "gtc_wan_2_7_image_pro": {
@@ -5031,8 +5007,7 @@
           {
             "type": "model_usage",
             "model_ids": [
-              "gtc_qwen_image",
-              "gtc_qwen_image_plus"
+              "gtc_qwen_image_3_0"
             ]
           }
         ]
@@ -5058,9 +5033,7 @@
           {
             "type": "model_usage",
             "model_ids": [
-              "gtc_qwen_image_edit",
-              "gtc_qwen_image_edit_plus",
-              "gtc_qwen_image_edit_plus_2025_10_30"
+              "gtc_qwen_image_3_0"
             ]
           }
         ]

@@ -176,6 +176,25 @@ EXPLICIT_LEGACY_VALUES: dict[str, dict[str, str]] = {
         "kling-v2-master": "kling-v2-6",
         "kling-v2-1-master": "kling-v2-6",
     },
+    "QwenImageGeneration": {
+        "Qwen Image": "qwen-image-3.0",
+        "Qwen Image Plus": "qwen-image-3.0",
+        "gtc_qwen_image": "qwen-image-3.0",
+        "gtc_qwen_image_plus": "qwen-image-3.0",
+        "qwen-image": "qwen-image-3.0",
+        "qwen-image-plus": "qwen-image-3.0",
+    },
+    "QwenImageEdit": {
+        "Qwen Image Edit": "qwen-image-3.0",
+        "Qwen Image Edit Plus": "qwen-image-3.0",
+        "Qwen Image Edit Plus (2025-10-30)": "qwen-image-3.0",
+        "gtc_qwen_image_edit": "qwen-image-3.0",
+        "gtc_qwen_image_edit_plus": "qwen-image-3.0",
+        "gtc_qwen_image_edit_plus_2025_10_30": "qwen-image-3.0",
+        "qwen-image-edit": "qwen-image-3.0",
+        "qwen-image-edit-plus": "qwen-image-3.0",
+        "qwen-image-edit-plus-2025-10-30": "qwen-image-3.0",
+    },
 }
 
 
