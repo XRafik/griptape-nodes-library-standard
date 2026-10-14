@@ -77,15 +77,17 @@ class TestTextInputSplit:
 
         assert node.parameter_output_values["output_split"] == ["a", "", "b"]
 
-    def test_failed_split_raises_when_the_node_runs(self, node: TextInput, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_failed_split_raises_the_original_error_when_the_node_runs(
+        self, node: TextInput, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         def fail(*_: object) -> list[str]:
             msg = "bad text"
-            raise ValueError(msg)
+            raise TypeError(msg)
 
         node.set_parameter_value("split_text", True)
         monkeypatch.setattr(SplitOptions, "split", fail)
 
-        with pytest.raises(ValueError, match="Could not split the text: bad text"):
+        with pytest.raises(TypeError, match="bad text"):
             node.process()
 
     def test_failed_split_does_not_raise_when_a_value_is_set(

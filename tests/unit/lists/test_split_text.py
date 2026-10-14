@@ -6,6 +6,7 @@ from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 
 from griptape_nodes_library.lists.split_text import SplitText
 from griptape_nodes_library.text.create_multiline_text import TextInput
+from griptape_nodes_library.utils.split_text_utils import SplitOptions
 
 TOGGLE_OPTIONS = ["include_delimiter", "trim_whitespace", "remove_empty"]
 
@@ -25,6 +26,34 @@ class TestSplitText:
         node.set_parameter_value("remove_empty", True)
 
         assert node.parameter_output_values["output"] == ["a", "b"]
+
+    def test_failed_split_raises_the_original_error_and_clears_the_output(
+        self, node: SplitText, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fail(*_: object) -> list[str]:
+            msg = "bad text"
+            raise TypeError(msg)
+
+        node.parameter_output_values["output"] = ["stale"]
+        monkeypatch.setattr(SplitOptions, "split", fail)
+
+        with pytest.raises(TypeError, match="bad text"):
+            node.process()
+
+        assert node.parameter_output_values["output"] == []
+
+    def test_failed_split_does_not_raise_when_a_value_is_set(
+        self, node: SplitText, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fail(*_: object) -> list[str]:
+            msg = "bad text"
+            raise TypeError(msg)
+
+        monkeypatch.setattr(SplitOptions, "split", fail)
+
+        node.set_parameter_value("text", "a,b")
+
+        assert node.parameter_output_values["output"] == []
 
     def test_toggle_options_accept_input(self, node: SplitText) -> None:
         for name in TOGGLE_OPTIONS:

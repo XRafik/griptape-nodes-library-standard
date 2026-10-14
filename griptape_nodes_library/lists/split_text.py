@@ -91,8 +91,7 @@ class SplitText(ControlNode):
             self.parameter_output_values[self.output.name] = []
             self.publish_update_to_parameter(self.output.name, [])
             if raise_on_failure:
-                msg = f"Could not split the text: {e}"
-                raise ValueError(msg) from e
+                raise
             logger.warning("%s: Could not split the text: %s", self.name, e)
 
     def process(self) -> None:

@@ -92,8 +92,7 @@ class TextInput(DataNode):
             split_result = self.split_options.split(self, text)
         except (TypeError, ValueError) as e:
             if raise_on_failure:
-                msg = f"Could not split the text: {e}"
-                raise ValueError(msg) from e
+                raise
             logger.warning("%s: Could not split the text: %s", self.name, e)
             split_result = []
 
