@@ -123,28 +123,28 @@ class CropImage(ControlNode):
                 name="left",
                 default_value=DEFAULT_LEFT,
                 tooltip="Left edge of crop area in pixels",
-                traits={Slider(min_val=0, max_val=self.MAX_WIDTH)},
+                traits={Slider(min_val=0, max_val=self.MAX_WIDTH, soft_limits=True)},
             )
 
             ParameterInt(
                 name="top",
                 default_value=DEFAULT_TOP,
                 tooltip="Top edge of crop area in pixels",
-                traits={Slider(min_val=0, max_val=self.MAX_HEIGHT)},
+                traits={Slider(min_val=0, max_val=self.MAX_HEIGHT, soft_limits=True)},
             )
 
             ParameterInt(
                 name="width",
                 default_value=DEFAULT_WIDTH,
                 tooltip="Width of crop area in pixels (0 = use full width)",
-                traits={Slider(min_val=0, max_val=self.MAX_WIDTH)},
+                traits={Slider(min_val=0, max_val=self.MAX_WIDTH, soft_limits=True)},
             )
 
             ParameterInt(
                 name="height",
                 default_value=DEFAULT_HEIGHT,
                 tooltip="Height of crop area in pixels (0 = use full height)",
-                traits={Slider(min_val=0, max_val=self.MAX_HEIGHT)},
+                traits={Slider(min_val=0, max_val=self.MAX_HEIGHT, soft_limits=True)},
             )
         self.add_node_element(crop_coordinates)
 
