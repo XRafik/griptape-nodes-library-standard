@@ -66,7 +66,7 @@ class JsonExtractValue(DataNode):
             try:
                 result = jmespath.search(path, json_data)
             except (ValueError, TypeError) as e:
-                msg = f"{self.name}: Invalid JMESPath expression '{path}': {e}"
+                msg = f"Invalid JMESPath expression '{path}': {e}"
                 raise ValueError(msg) from e
 
         # Handle None result - return empty dict like other JSON nodes

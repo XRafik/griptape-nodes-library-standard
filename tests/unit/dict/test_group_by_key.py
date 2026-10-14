@@ -88,27 +88,27 @@ class TestGroupByKey:
 
     def test_json_string_that_is_not_an_object_raises(self, node: GroupByKey) -> None:
         node.parameter_values["items"] = ["[1, 2]"]
-        with pytest.raises(TypeError, match="item 0 is a list"):
+        with pytest.raises(TypeError, match="Item 0 in 'Items' is a list"):
             node.process()
 
     @pytest.mark.parametrize("items", ["null", "0", "false", "5", "true", '"text"', "not json"])
     def test_scalar_or_non_json_items_string_raises(self, node: GroupByKey, items: str) -> None:
         node.parameter_values["items"] = items
-        with pytest.raises(TypeError, match="items is a"):
+        with pytest.raises(TypeError, match="'Items' is a"):
             node.process()
 
     def test_non_json_string_item_raises(self, node: GroupByKey) -> None:
         node.parameter_values["items"] = ["{not json"]
-        with pytest.raises(TypeError, match="item 0 is a str"):
+        with pytest.raises(TypeError, match="Item 0 in 'Items' is a str"):
             node.process()
 
     def test_non_dict_item_raises(self, node: GroupByKey) -> None:
         node.parameter_values["items"] = [{"a": 1}, "oops"]
-        with pytest.raises(TypeError, match="item 1 is a str"):
+        with pytest.raises(TypeError, match="Item 1 in 'Items' is a str"):
             node.process()
 
     def test_missing_group_field_raises(self, node: GroupByKey) -> None:
         node.parameter_values["items"] = [{"shot": "sh010"}, {"note": "rim"}]
         node.parameter_values["group_by"] = "shot"
-        with pytest.raises(KeyError, match="item 1 has no 'shot' field"):
+        with pytest.raises(KeyError, match="Item 1 in 'Items' has no 'shot' field"):
             node.process()

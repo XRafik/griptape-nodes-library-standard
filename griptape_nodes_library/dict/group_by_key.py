@@ -65,7 +65,7 @@ class GroupByKey(DataNode):
         if isinstance(items, dict):
             items = [items]
         if not isinstance(items, list):
-            msg = f"{self.name}: items is a {type(items).__name__}, not a list of dictionaries."
+            msg = f"'Items' is a {type(items).__name__}, not a list of dictionaries."
             raise TypeError(msg)
         field = (self.get_parameter_value("group_by") or "").strip()
 
@@ -73,14 +73,14 @@ class GroupByKey(DataNode):
         for index, raw_item in enumerate(items):
             item = self._decode_json(raw_item)
             if not isinstance(item, dict):
-                msg = f"{self.name}: item {index} is a {type(item).__name__}, not a dictionary."
+                msg = f"Item {index} in 'Items' is a {type(item).__name__}, not a dictionary."
                 raise TypeError(msg)
             if not field:
                 for key, value in item.items():
                     groups.setdefault(str(key), []).append(value)
                 continue
             if field not in item:
-                msg = f"{self.name}: item {index} has no '{field}' field to group by."
+                msg = f"Item {index} in 'Items' has no '{field}' field. Check 'Group By'."
                 raise KeyError(msg)
             groups.setdefault(str(item[field]), []).append(item)
         return groups
