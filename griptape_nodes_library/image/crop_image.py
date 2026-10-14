@@ -445,6 +445,25 @@ class CropImage(ControlNode):
         if crop_height <= 0 or crop_top + crop_height > img_height:
             crop_height = img_height - crop_top
 
+        # A width/height of 0 is the "use full size" sentinel, so only other mismatches count as adjustments
+        width_adjusted = width != 0 and crop_width != width
+        height_adjusted = height != 0 and crop_height != height
+        if crop_left != left or crop_top != top or width_adjusted or height_adjusted:
+            logger.info(
+                "%s: crop box (left=%s, top=%s, width=%s, height=%s) adjusted to (%s, %s, %s, %s) for %sx%s image",
+                self.name,
+                left,
+                top,
+                width,
+                height,
+                crop_left,
+                crop_top,
+                crop_width,
+                crop_height,
+                img_width,
+                img_height,
+            )
+
         # Calculate final crop boundaries
         crop_right = crop_left + crop_width
         crop_bottom = crop_top + crop_height
