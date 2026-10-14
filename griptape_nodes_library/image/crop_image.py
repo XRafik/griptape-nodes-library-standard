@@ -123,28 +123,28 @@ class CropImage(ControlNode):
                 name="left",
                 default_value=DEFAULT_LEFT,
                 tooltip="Left edge of crop area in pixels",
-                traits={Slider(min_val=0, max_val=self.MAX_WIDTH)},
+                traits={Slider(min_val=0, max_val=self.MAX_WIDTH, soft_limits=True)},
             )
 
             ParameterInt(
                 name="top",
                 default_value=DEFAULT_TOP,
                 tooltip="Top edge of crop area in pixels",
-                traits={Slider(min_val=0, max_val=self.MAX_HEIGHT)},
+                traits={Slider(min_val=0, max_val=self.MAX_HEIGHT, soft_limits=True)},
             )
 
             ParameterInt(
                 name="width",
                 default_value=DEFAULT_WIDTH,
                 tooltip="Width of crop area in pixels (0 = use full width)",
-                traits={Slider(min_val=0, max_val=self.MAX_WIDTH)},
+                traits={Slider(min_val=0, max_val=self.MAX_WIDTH, soft_limits=True)},
             )
 
             ParameterInt(
                 name="height",
                 default_value=DEFAULT_HEIGHT,
                 tooltip="Height of crop area in pixels (0 = use full height)",
-                traits={Slider(min_val=0, max_val=self.MAX_HEIGHT)},
+                traits={Slider(min_val=0, max_val=self.MAX_HEIGHT, soft_limits=True)},
             )
         self.add_node_element(crop_coordinates)
 
@@ -443,6 +443,25 @@ class CropImage(ControlNode):
             crop_width = img_width - crop_left
         if crop_height <= 0 or crop_top + crop_height > img_height:
             crop_height = img_height - crop_top
+
+        # A width/height of 0 is the "use full size" sentinel, so only other mismatches count as adjustments
+        width_adjusted = width != 0 and crop_width != width
+        height_adjusted = height != 0 and crop_height != height
+        if crop_left != left or crop_top != top or width_adjusted or height_adjusted:
+            logger.info(
+                "%s: crop box (left=%s, top=%s, width=%s, height=%s) adjusted to (%s, %s, %s, %s) for %sx%s image",
+                self.name,
+                left,
+                top,
+                width,
+                height,
+                crop_left,
+                crop_top,
+                crop_width,
+                crop_height,
+                img_width,
+                img_height,
+            )
 
         # Calculate final crop boundaries
         crop_right = crop_left + crop_width
