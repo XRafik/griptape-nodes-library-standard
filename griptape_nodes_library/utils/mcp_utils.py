@@ -2,12 +2,13 @@
 
 from typing import Any
 
-from griptape.tools import MCPTool
 from griptape_nodes.retained_mode.events.mcp_events import (
     GetEnabledMCPServersRequest,
     GetEnabledMCPServersResultSuccess,
 )
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes, logger
+
+from griptape_nodes_library.utils.mcp_compat_tool import Mcp2CompatibleTool, MCPToolInitError
 
 
 def get_available_mcp_servers() -> list[str]:
@@ -77,7 +78,7 @@ def get_server_config(mcp_server_name: str) -> dict[str, Any] | None:
     return enabled_result.servers[mcp_server_name]  # type: ignore[return-value]
 
 
-def create_mcp_tool(mcp_server_name: str, server_config: dict[str, Any]) -> MCPTool:
+def create_mcp_tool(mcp_server_name: str, server_config: dict[str, Any]) -> Mcp2CompatibleTool:
     """Create MCP tool from server configuration.
 
     Args:
@@ -85,7 +86,7 @@ def create_mcp_tool(mcp_server_name: str, server_config: dict[str, Any]) -> MCPT
         server_config: Server configuration dictionary
 
     Returns:
-        MCPTool: Initialized MCP tool
+        Mcp2CompatibleTool: Initialized MCP tool
     """
     # Create MCP connection from server config
     connection = create_connection_from_config(server_config)
@@ -94,8 +95,14 @@ def create_mcp_tool(mcp_server_name: str, server_config: dict[str, Any]) -> MCPT
     clean_name = "".join(c for c in mcp_server_name if c.isalnum())
     tool_name = f"mcp{clean_name.title()}"
 
-    # Create and initialize the tool
-    tool = MCPTool(connection=connection, name=tool_name)  # type: ignore[arg-type]
+    # Create and initialize the tool. Raises MCPToolInitError if the server can't be reached.
+    tool = Mcp2CompatibleTool(connection=connection, name=tool_name)  # type: ignore[arg-type]
+
+    # An MCPTool with no activities is sent to the model as an empty tool list, which some
+    # providers (e.g. Bedrock) reject with an opaque validation error. Fail here instead.
+    if not tool.activities():
+        msg = f"MCP server '{mcp_server_name}' did not expose any tools."
+        raise MCPToolInitError(msg)
 
     return tool
 
