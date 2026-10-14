@@ -89,7 +89,7 @@ if not source_path:
 
 # GOOD
 if not source_path:
-    error = ValueError("Connect a file to 'Source'.")
+    error = NodeError("Connect a file to 'Source'.")
     self._set_status_results(was_successful=False, result_details=str(error))
     self._handle_failure_exception(error)
     return
@@ -200,7 +200,7 @@ async def test_success_sets_was_successful(node):
 async def test_failure_sets_was_successful(node):
     # No failure edge wired → _handle_failure_exception re-raises
     node._has_outgoing_connections = lambda _param: False
-    with pytest.raises(ValueError, match="..."):
+    with pytest.raises(NodeError, match="..."):
         await node.aprocess()
     assert node.parameter_output_values["was_successful"] is False
 

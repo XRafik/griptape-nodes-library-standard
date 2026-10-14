@@ -5,8 +5,8 @@ description: Write a node's error handling in the Griptape Nodes Library - error
 
 # Node Error Handling
 
-The editor shows a failed node's name and exception type next to its message. A `NodeError` can also
-carry `fields`, `response`, and `links`, which the editor shows under **More info**.
+The editor shows a failed node's name and message. A `NodeError` can also carry `fields`,
+`response`, and `links`, which the editor shows under **More info**.
 
 Reference: the engine's `docs/development/custom_nodes/example_node_error_node.py`.
 
@@ -35,13 +35,25 @@ supported-formats page, or a place in the editor such as
 
 ## Pick the exception
 
-**Bad input:** a plain exception. It keeps its type, which the editor shows.
+Raise `NodeError` for errors you add or change. It takes just a message, and the attachments below
+are optional, so it works for any error a user will see. New and changed code using it keeps errors
+consistent.
+
+Existing `ValueError`, `RuntimeError`, and similar raises don't need converting, and converting them
+all is separate work. When you do convert one, check who catches it: `NodeError` isn't a
+`ValueError`, so a caller with `except ValueError` would stop catching it.
+
+Keep a plain exception for errors you don't raise yourself, such as a `FileNotFoundError` from
+`open()` that just propagates, and for developer errors, like a guard that fires on a coding mistake
+rather than anything the user did.
+
+**Just a message**, such as bad input:
 
 ```python
-raise ValueError("Connect an image to 'Input Image'.")
+raise NodeError("Connect an image to 'Input Image'.")
 ```
 
-**Something to attach** (a provider response, status code, ID, or link): `NodeError`.
+**Something to attach** (a provider response, status code, ID, or link):
 
 ```python
 from griptape_nodes.exe_types.core_types import NodeError, NodeErrorLink
@@ -88,7 +100,7 @@ The helpers `error_response`, `missing_secret_error`, and others live in
 `griptape_nodes_library/utils/node_error_utils.py`.
 
 **Don't re-wrap** an exception just to add a prefix (`raise RuntimeError(f"Failed: {e}") from e`).
-It hides the real type. Let it propagate.
+It adds nothing and replaces the type in logs and tracebacks. Let it propagate.
 
 ## Every failure must reach the editor
 
@@ -97,7 +109,7 @@ In a `SuccessFailureNode`, route every failure through `_handle_failure_exceptio
 failure: with **Failed** unwired, nothing shows up.
 
 ```python
-error = ValueError("Connect a file to 'Source'.")
+error = NodeError("Connect a file to 'Source'.")
 self._set_status_results(was_successful=False, result_details=str(error))
 self._handle_failure_exception(error)
 return
@@ -123,7 +135,7 @@ The base class `GriptapeProxyNode` attaches the response, IDs, and status for yo
 ```python
 def test_raises_when_failed_is_unwired(node):
     node._has_outgoing_connections = lambda _param: False
-    with pytest.raises(ValueError, match="Connect an image"):
+    with pytest.raises(NodeError, match="Connect an image"):
         node.process()
 
 def test_follows_failed_when_wired(node):
