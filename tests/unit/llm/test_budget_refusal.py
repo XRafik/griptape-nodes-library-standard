@@ -188,11 +188,11 @@ class TestNodesRaiseTheHalt:
         with pytest.raises(BudgetExceededError):
             _drive(node)
 
-    def test_split_video_keeps_the_halt_on_its_wrapped_error(self, refusing_cloud: _Cloud) -> None:
+    def test_split_video_raises_the_halt(self, refusing_cloud: _Cloud) -> None:
         node = SplitVideo(name="Split")
-        with pytest.raises(ValueError, match="parse timecodes") as caught:
+        with pytest.raises(BudgetExceededError) as caught:
             node._parse_timecodes_with_agent("00:00:00:00-00:00:01:00")
-        _assert_names_the_budget(caught.value.__cause__)
+        _assert_names_the_budget(caught.value)
 
 
 class TestAHaltInsideAToolStopsTheRun:

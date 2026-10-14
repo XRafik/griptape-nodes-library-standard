@@ -228,7 +228,7 @@ def test_third_party_provider_type_maps_to_model_provider(
 def test_unknown_provider_fails_clearly(agent_node: Agent, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(agent_node._provider, "_fetch_providers", lambda: [])
 
-    with pytest.raises(ValueError, match="provider 'gone' not found"):
+    with pytest.raises(ValueError, match="Provider 'gone' is not one of the configured providers"):
         agent_node._resolve_model_config("m", "gone")
 
 

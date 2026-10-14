@@ -36,6 +36,7 @@ from griptape_nodes.retained_mode.events.workflow_events import (
     WorkflowStatus,
 )
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
+from griptape_nodes.serialization.values import decode_value
 from pydantic_ai.messages import (
     BinaryContent,
     ModelMessage,
@@ -370,8 +371,13 @@ def saved_values(name: str | Path) -> dict[tuple[str, str, bool], Any]:
         kwargs = {k.arg: k.value for k in call.keywords}
         node_var = kwargs["node_name"]
         value = kwargs["value"]
+        # Newer saves wrap the lookup in decode_value(...), which rebuilds '$type'-tagged values.
+        decode = isinstance(value, ast.Call) and getattr(value.func, "id", "") == "decode_value"
+        if decode:
+            value = value.args[0]
         assert isinstance(node_var, ast.Name)
         assert isinstance(value, ast.Subscript)
         key = (names[node_var.id], ast.literal_eval(kwargs["parameter_name"]), ast.literal_eval(kwargs["is_output"]))
-        values[key] = unique[ast.literal_eval(value.slice)]
+        saved = unique[ast.literal_eval(value.slice)]
+        values[key] = decode_value(saved) if decode else saved
     return values

@@ -257,7 +257,7 @@ class TestAmazonBedrock:
         monkeypatch.setattr("boto3.Session", explode)
         node = _create_node("AmazonBedrockPrompt")
 
-        with pytest.raises(RuntimeError, match="Failed to create AWS session"):
+        with pytest.raises(RuntimeError, match="Could not create an AWS session"):
             node.process()
 
     def test_validation_reports_each_missing_aws_secret(self, monkeypatch: pytest.MonkeyPatch) -> None:

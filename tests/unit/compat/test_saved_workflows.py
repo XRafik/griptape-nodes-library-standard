@@ -498,6 +498,10 @@ TEMPLATES = sorted(p for p in (FIXTURES.parents[4] / "workflows" / "templates").
 TEMPLATE_LOAD_WARNINGS = {
     "fill_in_the_story": "Seedream Image Generation.",
     "flux_2_-_replace_a_face": "ParameterImage 'input_image': Conflicting values for 'hide_property'",
+    # Variable nodes list variables in __init__, before they are assigned to a flow.
+    "jev_prompt_clearance": "' not found or not assigned to any flow.",
+    "jev_review_note_workflow": "' not found or not assigned to any flow.",
+    "jev_shot_check": "' not found or not assigned to any flow.",
 }
 LLM_NODE_TYPES = {"Agent", "DescribeImage", "GenerateImage", "MCPTaskNode", "SummarizeAgentMemory", "AgentToTool"}
 
