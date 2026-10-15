@@ -12,8 +12,9 @@ from griptape_nodes_library.image.crop_image import CropImage
 IMG_SIZE = (200, 100)
 
 
-def _node() -> CropImage:
-    return CropImage(name="CropImage")
+@pytest.fixture
+def node() -> CropImage:
+    return CropImage(name="test_crop_image")
 
 
 def _box(node: CropImage, left: int, top: int, width: int, height: int) -> tuple[int, int, int, int]:
@@ -33,50 +34,46 @@ def _box(node: CropImage, left: int, top: int, width: int, height: int) -> tuple
         (-10, 0, 50, 40, (0, 0, 40, 40)),
         (0, -10, 50, 40, (0, 0, 50, 30)),
         (-10, -10, 0, 0, (0, 0, 200, 100)),
-        # A box entirely left of or above the image leaves an empty crop
-        (-60, 0, 50, 40, (0, 0, 0, 40)),
-        (0, -60, 50, 40, (0, 0, 50, 0)),
+        # A box entirely left of or above the image becomes a 1px edge strip
+        (-60, 0, 50, 40, (0, 0, 1, 40)),
+        (-50, 0, 50, 40, (0, 0, 1, 40)),
+        (0, -60, 50, 40, (0, 0, 50, 1)),
         # A box past the right/bottom edge is trimmed to the image
         (180, 90, 50, 40, (180, 90, 200, 100)),
     ],
 )
-def test_calculate_crop_area(left: int, top: int, width: int, height: int, expected: tuple[int, int, int, int]) -> None:
-    assert _box(_node(), left, top, width, height) == expected
+def test_calculate_crop_area(
+    node: CropImage, left: int, top: int, width: int, height: int, expected: tuple[int, int, int, int]
+) -> None:
+    assert _box(node, left, top, width, height) == expected
 
 
-def test_adjusted_crop_box_logs_info(caplog: pytest.LogCaptureFixture) -> None:
+def test_adjusted_crop_box_logs_info(node: CropImage, caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.INFO, logger="griptape_nodes"):
-        _box(_node(), -10, 0, 50, 40)
+        _box(node, -10, 0, 50, 40)
 
     assert "adjusted to (0, 0, 40, 40)" in caplog.text
 
 
-def test_full_size_sentinel_does_not_log(caplog: pytest.LogCaptureFixture) -> None:
+def test_full_size_sentinel_does_not_log(node: CropImage, caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.INFO, logger="griptape_nodes"):
-        _box(_node(), 0, 0, 0, 0)
+        _box(node, 0, 0, 0, 0)
 
     assert "adjusted" not in caplog.text
 
 
 @pytest.mark.parametrize(("param", "value"), [("left", -10), ("top", -10)])
-def test_negative_origin_passes_validation(param: str, value: int) -> None:
-    node = _node()
+def test_negative_origin_passes_validation(node: CropImage, param: str, value: int) -> None:
     node.set_parameter_value(param, value)
 
     assert node._validate_parameters() == []
 
 
 @pytest.mark.parametrize("param", ["width", "height"])
-def test_negative_size_fails_validation(param: str) -> None:
-    node = _node()
+def test_negative_size_fails_validation(node: CropImage, param: str) -> None:
     node.set_parameter_value(param, -10)
 
     assert len(node._validate_parameters()) == 1
-
-
-@pytest.fixture
-def node() -> CropImage:
-    return CropImage(name="test_crop_image")
 
 
 def crop(node: CropImage, left: int, top: int, width: int, height: int) -> Image.Image:
@@ -102,6 +99,9 @@ def crop(node: CropImage, left: int, top: int, width: int, height: int) -> Image
         (200, 0, 50, 50, (1, 50)),
         (0, 150, 50, 50, (50, 1)),
         (500, 500, 0, 0, (1, 1)),
+        (-60, 0, 50, 40, (1, 40)),
+        (-50, 0, 50, 40, (1, 40)),
+        (0, -60, 50, 40, (50, 1)),
     ],
 )
 def test_origin_past_edge_crops_to_edge_strip(
