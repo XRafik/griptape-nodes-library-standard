@@ -141,10 +141,8 @@ class BasePassThroughNode(DataNode, ABC):
 
     def _find_remaining_incoming_source_parameter(self, removed_source_parameter: Parameter) -> Parameter | None:
         connections = GriptapeNodes.FlowManager().get_connections()
-        incoming_for_node = connections.incoming_index.get(self.name, {})
-        for connection_id in incoming_for_node.get(self.pass_thru_parameter.name, []):
-            connection = connections.connections.get(connection_id)
-            if connection is not None and connection.source_parameter is not removed_source_parameter:
+        for connection in connections.get_incoming_connections_to_parameter(self, self.pass_thru_parameter):
+            if connection.source_parameter is not removed_source_parameter:
                 return connection.source_parameter
         return None
 
@@ -173,6 +171,9 @@ class BasePassThroughNode(DataNode, ABC):
             self._reset_parameter_types()
 
         self._ensure_output_uses_all_instead_of_any()
+        if has_control_type(param):
+            # Accepting the control type lets further control wires merge in, as on a control input.
+            param.input_types = [ParameterTypeBuiltin.CONTROL_TYPE.value]
 
     def _propagate_backwards(self) -> None:
         # Resolve backward to propagate type changes from outgoing connections.
@@ -209,14 +210,9 @@ class BasePassThroughNode(DataNode, ABC):
             msg = "Invalid state: self.incoming_source_parameter must not be None"
             raise ValueError(msg)
         param = self.get_pass_thru_parameter()
-        source_type = self.incoming_source_parameter.output_type
-        if source_type == ParameterTypeBuiltin.CONTROL_TYPE.value:
-            # Accepting the control type lets further control wires merge in, as on a control input.
-            param.input_types = [ParameterTypeBuiltin.CONTROL_TYPE.value]
-        else:
-            param.input_types = [ParameterTypeBuiltin.ANY.value]
-        param.type = source_type
-        param.output_type = source_type
+        param.input_types = [ParameterTypeBuiltin.ANY.value]
+        param.type = self.incoming_source_parameter.output_type
+        param.output_type = self.incoming_source_parameter.output_type
 
     def _to_outgoing_target_parameters_key(
         self, outgoing_target_node: BaseNode, outgoing_target_parameter: Parameter

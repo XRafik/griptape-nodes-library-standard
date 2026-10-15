@@ -220,3 +220,29 @@ def test_control_wires_merge_before_an_outgoing_wire_exists(flow_name: str, node
     incoming_ids = connections.incoming_index.get(name, {}).get(param.name, [])
     sources = {connections.connections[connection_id].source_node.name for connection_id in incoming_ids}
     assert sources == {first_if_else, second_if_else}
+
+
+@pytest.mark.parametrize("outgoing_first", [False, True])
+@pytest.mark.parametrize("downstream_type", PASS_THROUGH_TYPES)
+def test_control_wires_merge_into_pass_through_chain(
+    flow_name: str,
+    downstream_type: str,
+    outgoing_first: bool,  # noqa: FBT001
+) -> None:
+    first_if_else = _create("IfElse", flow_name)
+    second_if_else = _create("IfElse", flow_name)
+    first = _create("DotNode", flow_name)
+    second = _create(downstream_type, flow_name)
+    first_param = _node(first).get_pass_thru_parameter().name
+    chain_wire = (first, first_param, second, _node(second).get_pass_thru_parameter().name)
+    if outgoing_first:
+        _connect(*chain_wire)
+    _connect(first_if_else, "Then", first, first_param)
+    if not outgoing_first:
+        _connect(*chain_wire)
+    _connect(second_if_else, "Then", first, first_param)
+
+    connections = GriptapeNodes.FlowManager().get_connections()
+    incoming_ids = connections.incoming_index.get(first, {}).get(first_param, [])
+    sources = {connections.connections[connection_id].source_node.name for connection_id in incoming_ids}
+    assert sources == {first_if_else, second_if_else}
