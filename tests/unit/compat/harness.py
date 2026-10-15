@@ -372,8 +372,9 @@ def saved_values(name: str | Path) -> dict[tuple[str, str, bool], Any]:
         node_var = kwargs["node_name"]
         value = kwargs["value"]
         # Newer saves wrap the lookup in decode_value(...), which rebuilds '$type'-tagged values.
-        decode = isinstance(value, ast.Call) and getattr(value.func, "id", "") == "decode_value"
-        if decode:
+        decode = False
+        if isinstance(value, ast.Call) and getattr(value.func, "id", "") == "decode_value":
+            decode = True
             value = value.args[0]
         assert isinstance(node_var, ast.Name)
         assert isinstance(value, ast.Subscript)
