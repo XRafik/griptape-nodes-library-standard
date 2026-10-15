@@ -440,9 +440,9 @@ class CropImage(ControlNode):
         if height > 0 and crop_top < 0:
             crop_height += crop_top
 
-        # Ensure crop coordinates are within image bounds
-        crop_left = max(0, min(crop_left, img_width))
-        crop_top = max(0, min(crop_top, img_height))
+        # Ensure crop coordinates are within image bounds; an origin past the edge becomes a 1px edge strip
+        crop_left = max(0, min(crop_left, img_width - 1))
+        crop_top = max(0, min(crop_top, img_height - 1))
 
         # Ensure crop dimensions are valid; a box entirely off the image leaves an empty crop
         if width <= 0 or crop_left + crop_width > img_width:
