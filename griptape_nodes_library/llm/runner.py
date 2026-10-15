@@ -29,6 +29,7 @@ from pydantic_ai.models.wrapper import WrapperModel
 from pydantic_ai.run import AgentRunResultEvent
 
 from griptape_nodes_library.llm.budget import raise_budget_halt
+from griptape_nodes_library.llm.errors import raise_provider_error
 from griptape_nodes_library.llm.history import history_token_budget, prune_history
 from griptape_nodes_library.llm.model_config import USE_NATIVE_TOOLS_OPTION
 from griptape_nodes_library.llm.models import build_model
@@ -157,6 +158,7 @@ async def run_agent_async(
         raise AgentRunCancelledError from exc
     except Exception as exc:
         raise_budget_halt(exc)
+        raise_provider_error(exc)
         raise
     finally:
         if watcher is not None:

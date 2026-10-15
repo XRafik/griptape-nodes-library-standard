@@ -14,6 +14,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from griptape_nodes.exe_types.core_types import NodeError
 from griptape_nodes.node_library.library_registry import LibraryRegistry
 from griptape_nodes.utils.budget_refusal import BUDGET_HALT_PREFIX, BudgetExceededError
 from pydantic_ai import Agent as PydanticAgent
@@ -145,15 +146,21 @@ class TestTheModelCallStops:
             prompt_model(CLOUD, "hello")
         assert refusing_cloud.paths == ["/api/v1/chat/completions"]
 
-    def test_a_403_that_is_not_a_budget_refusal_is_left_alone(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_a_403_that_is_not_a_budget_refusal_is_reported_as_the_provider_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         cloud = _Cloud(OTHER_403, OTHER_403)
         monkeypatch.setenv("GT_CLOUD_BASE_URL", cloud.base_url)
         monkeypatch.setenv("GT_CLOUD_API_KEY", "key")
         try:
-            with pytest.raises(ModelHTTPError):
+            with pytest.raises(NodeError, match="You do not have permission.") as caught:
                 prompt_model(CLOUD, "hello")
         finally:
             cloud.close()
+        assert not isinstance(caught.value, BudgetExceededError)
+        assert isinstance(caught.value.__cause__, ModelHTTPError)
+        assert caught.value.fields == {"status_code": 403, "error_code": "forbidden"}
+        assert caught.value.response == OTHER_403
 
 
 class TestNodesRaiseTheHalt:

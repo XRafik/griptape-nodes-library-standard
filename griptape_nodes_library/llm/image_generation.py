@@ -13,12 +13,14 @@ from typing import Any
 
 import httpx
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
-from openai import OpenAI
+from openai import APIStatusError, OpenAI
 from pydantic import BaseModel
 
 from griptape_nodes_library.llm.budget import cloud_root, raise_budget_halt
-from griptape_nodes_library.utils.cloud_credential_utils import missing_credential_message, resolve_cloud_api_key
+from griptape_nodes_library.llm.errors import raise_provider_error
+from griptape_nodes_library.utils.cloud_credential_utils import missing_credential_error, resolve_cloud_api_key
 from griptape_nodes_library.utils.griptape_cloud_headers import build_griptape_cloud_headers
+from griptape_nodes_library.utils.node_error_utils import missing_secret_error
 
 IMAGE_GENERATION_DRIVER_TYPE = "Image Generation Driver"
 
@@ -90,7 +92,7 @@ def _generate_griptape_cloud(config: ImageGenerationConfig, prompt: str) -> byte
         raise ValueError(msg)
     api_key = resolve_cloud_api_key()
     if not api_key:
-        raise KeyError(missing_credential_message(f"generate an image with model '{config.model}' on Griptape Cloud"))
+        raise missing_credential_error(f"generate an image with model '{config.model}' on Griptape Cloud")
 
     root = cloud_root(config.base_url)
     driver_configuration = {
@@ -115,6 +117,7 @@ def _generate_griptape_cloud(config: ImageGenerationConfig, prompt: str) -> byte
         response.raise_for_status()
     except httpx.HTTPStatusError as exc:
         raise_budget_halt(exc, base_url=root)
+        raise_provider_error(exc)
         raise
     return _decode_b64(response.json()["artifact"]["value"])
 
@@ -123,8 +126,11 @@ def _generate_openai_compatible(config: ImageGenerationConfig, prompt: str) -> b
     secret = config.api_key_secret or DEFAULT_API_KEY_SECRETS[config.provider]
     api_key = GriptapeNodes.SecretsManager().get_secret(secret, should_error_on_not_found=False)
     if not api_key:
-        msg = f"Cannot generate an image with model '{config.model}': secret '{secret}' is not set."
-        raise KeyError(msg)
+        msg = (
+            f"{secret} is not set. Image model '{config.model}' needs it. "
+            "Add it in Settings → API Keys & Secrets, then run the node again."
+        )
+        raise missing_secret_error(secret, message=msg)
     base_url = config.base_url or (GROK_BASE_URL if config.provider == ImageProvider.GROK else None)
 
     is_gpt_image = config.model.startswith(OPENAI_GPT_IMAGE_PREFIX)
@@ -142,9 +148,13 @@ def _generate_openai_compatible(config: ImageGenerationConfig, prompt: str) -> b
     else:
         params["response_format"] = "b64_json"
 
-    response = OpenAI(api_key=api_key, base_url=base_url).images.generate(
-        model=config.model, prompt=prompt, n=1, **{k: v for k, v in params.items() if v is not None}
-    )
+    try:
+        response = OpenAI(api_key=api_key, base_url=base_url).images.generate(
+            model=config.model, prompt=prompt, n=1, **{k: v for k, v in params.items() if v is not None}
+        )
+    except APIStatusError as exc:
+        raise_provider_error(exc)
+        raise
     if not response.data or response.data[0].b64_json is None:
         msg = "Failed to generate image"
         raise RuntimeError(msg)

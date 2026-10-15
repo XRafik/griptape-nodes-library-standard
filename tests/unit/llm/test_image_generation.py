@@ -6,9 +6,12 @@ from typing import Any
 
 import httpx
 import pytest
+from griptape_nodes.exe_types.core_types import NodeError
 
 import griptape_nodes_library.llm.image_generation as image_generation
 from griptape_nodes_library.llm.image_generation import ImageGenerationConfig, ImageProvider, generate_image
+from griptape_nodes_library.utils.cloud_credential_utils import MissingCredentialError
+from griptape_nodes_library.utils.node_error_utils import MissingSecretError
 
 PNG_BYTES = b"\x89PNG fake image"
 PNG_B64 = base64.b64encode(PNG_BYTES).decode()
@@ -79,7 +82,7 @@ class TestGriptapeCloud:
     ) -> None:
         monkeypatch.setattr(image_generation, "resolve_cloud_api_key", lambda: "")
 
-        with pytest.raises(KeyError, match="generate an image"):
+        with pytest.raises(MissingCredentialError, match="generate an image"):
             generate_image(ImageGenerationConfig(provider=ImageProvider.GRIPTAPE_CLOUD, model="m"), "p")
 
         assert "url" not in posted
@@ -90,16 +93,22 @@ class TestGriptapeCloud:
         with pytest.raises(ValueError, match="must be one of"):
             generate_image(config, "p")
 
-    def test_http_error_propagates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_http_error_is_reported_as_the_provider_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        body = {"error": {"message": "Payment required.", "code": "payment_required"}}
+
         def fake_post(url: str, **_: Any) -> httpx.Response:
-            return httpx.Response(402, request=httpx.Request("POST", url))
+            return httpx.Response(402, json=body, headers={"x-request-id": "req_1"}, request=httpx.Request("POST", url))
 
         monkeypatch.setattr(image_generation.httpx, "post", fake_post)
         monkeypatch.setattr(image_generation, "resolve_cloud_api_key", lambda: "gt-key")
         monkeypatch.setattr(image_generation, "build_griptape_cloud_headers", lambda *_, **__: {})
 
-        with pytest.raises(httpx.HTTPStatusError):
+        with pytest.raises(NodeError, match="Payment required.") as caught:
             generate_image(ImageGenerationConfig(provider=ImageProvider.GRIPTAPE_CLOUD, model="m"), "p")
+
+        assert isinstance(caught.value.__cause__, httpx.HTTPStatusError)
+        assert caught.value.fields == {"status_code": 402, "error_code": "payment_required", "request_id": "req_1"}
+        assert caught.value.response == body
 
 
 class TestOpenAiCompatible:
@@ -179,7 +188,7 @@ class TestOpenAiCompatible:
     def test_missing_secret_raises(self, openai_calls: dict[str, Any]) -> None:
         config = ImageGenerationConfig(provider=ImageProvider.OPENAI, model="dall-e-2", api_key_secret="MISSING")
 
-        with pytest.raises(KeyError, match="MISSING"):
+        with pytest.raises(MissingSecretError, match="MISSING"):
             generate_image(config, "p")
 
         assert "client" not in openai_calls

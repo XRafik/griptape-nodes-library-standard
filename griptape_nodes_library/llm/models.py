@@ -32,8 +32,9 @@ from griptape_nodes_library.llm.model_config import (
     ModelConfig,
     ModelProvider,
 )
-from griptape_nodes_library.utils.cloud_credential_utils import missing_credential_message, resolve_cloud_api_key
+from griptape_nodes_library.utils.cloud_credential_utils import missing_credential_error, resolve_cloud_api_key
 from griptape_nodes_library.utils.griptape_cloud_headers import build_griptape_cloud_headers
+from griptape_nodes_library.utils.node_error_utils import missing_secret_error
 
 if TYPE_CHECKING:
     from pydantic_ai.models import Model
@@ -131,7 +132,7 @@ def build_model(config: ModelConfig) -> Model:
     """Return a pydantic-ai model for `config`, resolving credentials now.
 
     Raises:
-        KeyError: A required credential is missing.
+        MissingSecretError: A required credential or API key is missing.
     """
     if _model_override is not None:
         return _model_override
@@ -139,7 +140,7 @@ def build_model(config: ModelConfig) -> Model:
         case ModelProvider.GRIPTAPE_CLOUD:
             api_key = resolve_api_key(config)
             if not api_key:
-                raise KeyError(missing_credential_message(f"run model '{config.model}' on Griptape Cloud"))
+                raise missing_credential_error(f"run model '{config.model}' on Griptape Cloud")
             root = cloud_root(config.base_url)
             return _openai_compatible(
                 config,
@@ -214,6 +215,9 @@ def _require_key(config: ModelConfig) -> str:
     api_key = resolve_api_key(config)
     if not api_key:
         secret = config.api_key_secret or DEFAULT_API_KEY_SECRETS.get(config.provider, "API key")
-        msg = f"Cannot run model '{config.model}': secret '{secret}' for provider '{config.provider}' is not set."
-        raise KeyError(msg)
+        msg = (
+            f"{secret} is not set. Model '{config.model}' on provider '{config.provider}' needs it. "
+            "Add it in Settings → API Keys & Secrets, then run the node again."
+        )
+        raise missing_secret_error(secret, message=msg)
     return api_key
