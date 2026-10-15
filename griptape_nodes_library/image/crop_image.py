@@ -434,15 +434,23 @@ class CropImage(ControlNode):
         crop_width = width if width > 0 else img_width
         crop_height = height if height > 0 else img_height
 
+        # A negative origin keeps the box's far edge, so only the part on the image is cropped
+        if width > 0 and crop_left < 0:
+            crop_width += crop_left
+        if height > 0 and crop_top < 0:
+            crop_height += crop_top
+
         # Ensure crop coordinates are within image bounds
         crop_left = max(0, min(crop_left, img_width))
         crop_top = max(0, min(crop_top, img_height))
 
-        # Ensure crop dimensions are valid
-        if crop_width <= 0 or crop_left + crop_width > img_width:
+        # Ensure crop dimensions are valid; a box entirely off the image leaves an empty crop
+        if width <= 0 or crop_left + crop_width > img_width:
             crop_width = img_width - crop_left
-        if crop_height <= 0 or crop_top + crop_height > img_height:
+        if height <= 0 or crop_top + crop_height > img_height:
             crop_height = img_height - crop_top
+        crop_width = max(crop_width, 0)
+        crop_height = max(crop_height, 0)
 
         # A width/height of 0 is the "use full size" sentinel, so only other mismatches count as adjustments
         width_adjusted = width != 0 and crop_width != width
@@ -740,19 +748,9 @@ class CropImage(ControlNode):
             msg = f"Output quality must be between 0.0 and 1.0, got {output_quality}"
             exceptions.append(Exception(msg))
 
-        # Validate crop coordinates are non-negative
-        left = self.get_parameter_value("left")
-        top = self.get_parameter_value("top")
+        # Validate crop size is non-negative; a negative left/top is clamped to the image at run time
         width = self.get_parameter_value("width")
         height = self.get_parameter_value("height")
-
-        if left is not None and left < 0:
-            msg = f"Left coordinate must be non-negative, got {left}"
-            exceptions.append(Exception(msg))
-
-        if top is not None and top < 0:
-            msg = f"Top coordinate must be non-negative, got {top}"
-            exceptions.append(Exception(msg))
 
         if width is not None and width < 0:
             msg = f"Width must be non-negative, got {width}"
