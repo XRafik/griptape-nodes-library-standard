@@ -3,6 +3,7 @@ from typing import Any
 
 from griptape_nodes.exe_types.core_types import Parameter, ParameterMode, ParameterTypeBuiltin
 from griptape_nodes.exe_types.node_types import BaseNode, DataNode
+from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 
 
 def contains_any(types: set[str]) -> bool:
@@ -56,6 +57,18 @@ class BasePassThroughNode(DataNode, ABC):
     def get_pass_thru_parameter(self) -> Parameter:
         return self.pass_thru_parameter
 
+    def allow_incoming_connection(
+        self,
+        source_node: BaseNode,  # noqa: ARG002
+        source_parameter: Parameter,
+        target_parameter: Parameter,
+    ) -> bool:
+        """Callback to confirm allowing a Connection coming TO this Node."""
+        # A control output drives at most one connection, so control cannot enter a fan-out.
+        return not (
+            target_parameter is self.pass_thru_parameter and has_control_type(source_parameter) and self._fans_out()
+        )
+
     def after_incoming_connection(
         self,
         source_node: BaseNode,  # noqa: ARG002
@@ -63,8 +76,7 @@ class BasePassThroughNode(DataNode, ABC):
         target_parameter: Parameter,
     ) -> None:
         """Callback after a Connection has been established TO this Node."""
-        if has_control_type(source_parameter) or has_control_type(target_parameter):
-            # No custom reroute logic for control parameters.
+        if target_parameter is not self.pass_thru_parameter:
             return
         self.incoming_source_parameter = source_parameter
         self._propagate_forwards()
@@ -76,10 +88,10 @@ class BasePassThroughNode(DataNode, ABC):
         target_parameter: Parameter,
     ) -> None:
         """Callback after a Connection TO this Node was REMOVED."""
-        if has_control_type(source_parameter) or has_control_type(target_parameter):
-            # No custom reroute logic for control parameters.
+        if target_parameter is not self.pass_thru_parameter:
             return
-        self.incoming_source_parameter = None
+        # Control wires can merge into the pass-through, so another source may still be connected.
+        self.incoming_source_parameter = self._find_remaining_incoming_source_parameter(source_parameter)
         self._propagate_forwards()
 
     def after_outgoing_connection(
@@ -89,8 +101,7 @@ class BasePassThroughNode(DataNode, ABC):
         target_parameter: Parameter,
     ) -> None:
         """Callback after a Connection has been established OUT of this Node."""
-        if has_control_type(source_parameter) or has_control_type(target_parameter):
-            # No custom reroute logic for control parameters.
+        if source_parameter is not self.pass_thru_parameter:
             return
         self._add_outgoing_target_parameter(target_node, target_parameter)
         self._propagate_backwards()
@@ -102,16 +113,38 @@ class BasePassThroughNode(DataNode, ABC):
         target_parameter: Parameter,
     ) -> None:
         """Callback after a Connection OUT of this Node was REMOVED."""
-        if has_control_type(source_parameter) or has_control_type(target_parameter):
-            # No custom reroute logic for control parameters.
+        if source_parameter is not self.pass_thru_parameter:
             return
         self._remove_outgoing_target_parameter(target_node, target_parameter)
         self._propagate_backwards()
+
+    def get_next_control_output(self) -> Parameter | None:
+        # A control wire routed through the pass-through parameter retypes it to the control type,
+        # so control continues out along the same wire it came in on.
+        if has_control_type(self.pass_thru_parameter):
+            return self.pass_thru_parameter
+        return super().get_next_control_output()
 
     def process(self) -> None:
         param = self.get_pass_thru_parameter()
         if param:
             self.parameter_output_values[param.name] = self.parameter_values.get(param.name)
+
+    def _fans_out(self) -> bool:
+        """Whether the pass-through, or a pass-through downstream of it, has more than one outgoing connection."""
+        if len(self.outgoing_target_parameters) > 1:
+            return True
+        return any(
+            isinstance(node, BasePassThroughNode) and node._fans_out()
+            for node in (param.get_node() for param in self.outgoing_target_parameters.values())
+        )
+
+    def _find_remaining_incoming_source_parameter(self, removed_source_parameter: Parameter) -> Parameter | None:
+        connections = GriptapeNodes.FlowManager().get_connections()
+        for connection in connections.get_incoming_connections_to_parameter(self, self.pass_thru_parameter):
+            if connection.source_parameter is not removed_source_parameter:
+                return connection.source_parameter
+        return None
 
     def _resolve_types(self) -> None:
         param = self.get_pass_thru_parameter()
@@ -138,6 +171,9 @@ class BasePassThroughNode(DataNode, ABC):
             self._reset_parameter_types()
 
         self._ensure_output_uses_all_instead_of_any()
+        if has_control_type(param):
+            # Accepting the control type lets further control wires merge in, as on a control input.
+            param.input_types = [ParameterTypeBuiltin.CONTROL_TYPE.value]
 
     def _propagate_backwards(self) -> None:
         # Resolve backward to propagate type changes from outgoing connections.
