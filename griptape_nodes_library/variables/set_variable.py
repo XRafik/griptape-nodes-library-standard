@@ -19,7 +19,6 @@ from griptape_nodes.retained_mode.events.variable_events import (
     SetVariableValueResultSuccess,
 )
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
-from griptape_nodes.retained_mode.variable_types import VariableScope
 from griptape_nodes.traits.button import Button, ButtonDetailsMessagePayload
 
 from griptape_nodes_library.variables.base_variable_node import BaseVariableNode
@@ -205,20 +204,23 @@ class SetVariable(BaseVariableNode):
             raise RuntimeError(msg)  # noqa: TRY004
 
     def _try_sync_variable_type(self, new_type: str) -> None:
-        """Best-effort update of the engine-side variable's type; silent on any failure."""
+        """Best-effort update of the engine-side variable's type; silent on any failure.
+
+        Looks the variable up at this node's own scope, the same scope ``_eager_create_variable``
+        and ``aprocess`` use, so the variable whose type is updated is the one this node writes.
+        """
         try:
             variable_name = self._resolve_variable_name()
             if not variable_name:
                 return
             current_flow_name = _get_flow_for_node(self.name)
-            if not has_variable(
-                node_name=self.name, variable_name=variable_name, scope=VariableScope.CURRENT_FLOW_ONLY
-            ):
+            scope = self._get_scope()
+            if not has_variable(node_name=self.name, variable_name=variable_name, scope=scope):
                 return
             type_request = SetVariableTypeRequest(
                 name=variable_name,
                 type=new_type,
-                lookup_scope=VariableScope.CURRENT_FLOW_ONLY,
+                lookup_scope=scope,
                 starting_flow=current_flow_name,
             )
             type_result = GriptapeNodes.handle_request(type_request)
