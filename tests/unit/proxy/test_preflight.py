@@ -20,7 +20,6 @@ from griptape_nodes_library.proxy import preflight
 from griptape_nodes_library.proxy.preflight import (
     ImageInfo,
     VideoProbe,
-    check_aspect_ratio,
     check_aspect_ratio_range,
     check_count,
     check_dimensions,
@@ -214,6 +213,24 @@ class TestLocalVideoProbe:
         assert "-show_format" in runs[0]
         assert "-show_streams" in runs[0]
 
+    def test_takes_the_duration_from_the_video_stream_not_the_container(
+        self, clip: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A 10 s video with a 31 s audio track: the container reports the longer audio.
+        self._answer(
+            monkeypatch,
+            {"format": {"duration": "31.0"}, "streams": [{"width": 1280, "height": 720, "duration": "10.0"}]},
+        )
+        probe = local_video_probe(str(clip))
+        assert probe is not None
+        assert probe.seconds == 10.0
+
+    def test_falls_back_to_the_container_duration(self, clip: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._answer(monkeypatch, {"format": {"duration": "7.5"}, "streams": [{"width": 1280, "height": 720}]})
+        probe = local_video_probe(str(clip))
+        assert probe is not None
+        assert probe.seconds == 7.5
+
     def test_reports_the_part_ffprobe_gave_when_the_other_is_missing(
         self, clip: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -368,20 +385,6 @@ class TestCheckDimensions:
         assert "(8.003 megapixels)" in str(error)
 
 
-class TestCheckAspectRatio:
-    @pytest.mark.parametrize(("width", "height"), [(1920, 1080), (1366, 768), (720, 1280)])
-    def test_allows_a_named_ratio(self, width: int, height: int) -> None:
-        info = ImageInfo(width, height, None)
-        assert check_aspect_ratio(info, subject=SUBJECT, allowed=("16:9", "9:16")) is None
-
-    def test_rejects_an_unnamed_ratio(self) -> None:
-        error = check_aspect_ratio(ImageInfo(1000, 1000, None), subject=SUBJECT, allowed=("16:9", "9:16"))
-        assert str(error) == f"{SUBJECT} is 1000x1000, which isn't a supported aspect ratio. Crop it to 16:9 or 9:16."
-
-    def test_skips_an_unknown_image(self) -> None:
-        assert check_aspect_ratio(None, subject=SUBJECT, allowed=("1:1",)) is None
-
-
 class TestCheckAspectRatioRange:
     @pytest.mark.parametrize(("width", "height"), [(300, 900), (900, 300), (1000, 1000), (1920, 1080)])
     def test_allows_a_shape_in_range_including_the_ends(self, width: int, height: int) -> None:
@@ -443,13 +446,6 @@ class TestImageErrors:
         errors = image_errors(_data_uri(_png_bytes(800, 600)), subject=SUBJECT, maximum_bytes=10)
         assert len(errors) == 1
         assert "and the limit is" in str(errors[0])
-
-    def test_stops_after_a_wrong_format_when_asked(self) -> None:
-        buffer = BytesIO()
-        Image.new("RGB", (200, 1000)).save(buffer, format="GIF")
-        image = _data_uri(buffer.getvalue(), "image/gif")
-        errors = image_errors(image, subject=SUBJECT, stop_after_format=True, **self.LIMITS)
-        assert [str(e) for e in errors] == [f"{SUBJECT} is a GIF file. Convert it to JPEG or PNG."]
 
     def test_links_the_docs_page(self) -> None:
         errors = image_errors(_data_uri(_png_bytes(100, 100)), subject=SUBJECT, min_side=300, docs_url=DOCS)

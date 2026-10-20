@@ -10,10 +10,10 @@ sometimes credits. These helpers let a node refuse it first, from what it can re
   None of them makes a network call or downloads a tool: the video readers use ffprobe only if it
   is already installed. They return None when the value is a remote URL, can't be found or parsed,
   or when the tool to read it is missing or too slow.
-- **Checks** (`check_count`, `check_size`, `check_dimensions`, `check_aspect_ratio`,
-  `check_aspect_ratio_range`, `check_mime_type`, `check_duration`, `check_frame_rate`) compare one
-  value with a limit and return a `NodeError` ready to append to `validate_before_node_run`'s list,
-  or None when the value is within the limit or unknown.
+- **Checks** (`check_count`, `check_size`, `check_dimensions`, `check_aspect_ratio_range`,
+  `check_mime_type`, `check_duration`, `check_frame_rate`) compare one value with a limit and
+  return a `NodeError` ready to append to `validate_before_node_run`'s list, or None when the value
+  is within the limit or unknown.
 
 A limit is enforced only where it can be read cheaply; anything else is left for the provider.
 
@@ -63,7 +63,6 @@ logger = logging.getLogger("griptape_nodes")
 __all__ = [
     "ImageInfo",
     "VideoProbe",
-    "check_aspect_ratio",
     "check_aspect_ratio_range",
     "check_count",
     "check_dimensions",
@@ -83,9 +82,6 @@ __all__ = [
 
 BYTES_PER_MB = 1024 * 1024
 
-# How far a measured width/height ratio may be from a named one, such as 16:9, and still match it.
-# Covers the rounding in sizes like 1366x768.
-ASPECT_RATIO_TOLERANCE = 0.01
 
 LIMITS_LINK_LABEL = "Provider limits"
 
@@ -242,12 +238,20 @@ def _frame_rate(data: dict[str, Any]) -> float | None:
 
 
 def _duration(data: dict[str, Any]) -> float | None:
-    """The container duration in ffprobe's JSON, in seconds, or None."""
-    duration = data.get("format", {}).get("duration")
-    try:
-        return float(duration) if duration is not None else None
-    except (TypeError, ValueError):
-        return None
+    """The first video stream's duration in ffprobe's JSON, else the container's, in seconds, or None.
+
+    The container's duration covers every stream, so a longer audio track would stretch it past the
+    video's own length.
+    """
+    streams = data.get("streams") or [{}]
+    for duration in (streams[0].get("duration"), data.get("format", {}).get("duration")):
+        if duration is None:
+            continue
+        try:
+            return float(duration)
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 def _probe_local_video(value: Any, args: list[str]) -> dict[str, Any] | None:
@@ -365,29 +369,6 @@ def check_dimensions(
     return None
 
 
-def check_aspect_ratio(
-    info: ImageInfo | None, *, subject: str, allowed: Sequence[str], docs_url: str | None = None
-) -> NodeError | None:
-    """An error when an image or video frame doesn't match one of the provider's named aspect ratios.
-
-    Args:
-        info: The pixel size, from `local_image_info` or `local_video_info`. None skips the check.
-        subject: The input, from `input_subject`.
-        allowed: The ratios accepted, such as ("16:9", "9:16").
-        docs_url: The provider's page documenting the limit.
-    """
-    if info is None or info.height == 0:
-        return None
-    ratio = info.width / info.height
-    if any(abs(ratio - _parse_ratio(name)) <= ASPECT_RATIO_TOLERANCE for name in allowed):
-        return None
-    return _error(
-        f"{subject} is {info.width}x{info.height}, which isn't a supported aspect ratio. "
-        f"Crop it to {_join_or(allowed)}.",
-        docs_url,
-    )
-
-
 def check_aspect_ratio_range(
     info: ImageInfo | None, *, subject: str, widest: str, tallest: str, docs_url: str | None = None
 ) -> NodeError | None:
@@ -478,7 +459,6 @@ def image_errors(  # noqa: PLR0913
     widest: str | None = None,
     tallest: str | None = None,
     docs_url: str | None = None,
-    stop_after_format: bool = False,
 ) -> list[NodeError]:
     """Every provider image limit an image input breaks, in one call.
 
@@ -497,18 +477,15 @@ def image_errors(  # noqa: PLR0913
         widest: The widest aspect ratio accepted, as the provider writes it, such as "2.5:1".
         tallest: The tallest aspect ratio accepted, such as "1:2.5".
         docs_url: The provider's page documenting the limits.
-        stop_after_format: Report only the format error when the format is wrong, for a node whose
-            later steps would convert the image anyway.
     """
     info = local_image_info(image)
     errors: list[NodeError | None] = []
     if allowed_mime_types:
-        format_error = check_mime_type(
-            info.mime_type if info else None, subject=subject, allowed=allowed_mime_types, docs_url=docs_url
+        errors.append(
+            check_mime_type(
+                info.mime_type if info else None, subject=subject, allowed=allowed_mime_types, docs_url=docs_url
+            )
         )
-        if format_error and stop_after_format:
-            return [format_error]
-        errors.append(format_error)
     if maximum_bytes is not None:
         errors.append(
             check_size(
