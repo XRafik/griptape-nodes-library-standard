@@ -111,6 +111,14 @@ class TestLocalImageInfo:
     def test_skips_a_remote_url(self) -> None:
         assert local_image_info("https://example.com/image.png") is None
 
+    def test_skips_an_image_pillow_recognises_but_cannot_decode(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def unimplemented(*_args: Any, **_kwargs: Any) -> None:
+            msg = "Unimplemented DXGI format 10"
+            raise NotImplementedError(msg)
+
+        monkeypatch.setattr(preflight.Image, "open", unimplemented)
+        assert local_image_info(_data_uri(_png_bytes(8, 8))) is None
+
     def test_skips_bytes_that_are_not_an_image(self) -> None:
         assert local_image_info(_data_uri(b"not an image")) is None
 
@@ -679,8 +687,11 @@ class TestCheckMimeType:
             ("image/x-icon", "is an ICON file."),
             ("image/tiff", "is a TIFF file."),
             ("image/vnd.adobe.photoshop", "is a PSD file."),
+            ("video/quicktime", "is an MOV file."),
+            ("video/x-matroska", "is an MKV file."),
+            ("video/x-msvideo", "is an AVI file."),
         ],
-        ids=["vowel-sound", "letter-h", "strips-x-prefix", "consonant", "known-name"],
+        ids=["vowel-sound", "letter-h", "strips-x-prefix", "consonant", "known-name", "mov", "mkv", "avi"],
     )
     def test_names_the_format_with_the_right_article(self, mime_type: str, expected: str) -> None:
         error = check_mime_type(mime_type, subject=SUBJECT, allowed=("image/jpeg", "image/png"))

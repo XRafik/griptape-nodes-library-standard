@@ -157,7 +157,16 @@ def local_image_info(value: Any) -> ImageInfo | None:
             # Phone and camera JPEGs with Multi-Picture extensions open as MPO; they are JPEG streams.
             mime_type = "image/jpeg" if image.format == "MPO" else Image.MIME.get(image.format or "")
             return ImageInfo(width=image.width, height=image.height, mime_type=mime_type)
-    except (OSError, UnidentifiedImageError, Image.DecompressionBombError, binascii.Error, ValueError) as e:
+    # Pillow re-raises NotImplementedError from a format plugin that recognises a file but can't decode
+    # it, such as a DDS texture in an unsupported DXGI format.
+    except (
+        OSError,
+        UnidentifiedImageError,
+        Image.DecompressionBombError,
+        binascii.Error,
+        ValueError,
+        NotImplementedError,
+    ) as e:
         logger.debug("Could not read image header for a pre-flight check, skipping it: %s", e)
         return None
 
@@ -738,6 +747,9 @@ _FORMAT_NAMES = {
     "image/vnd.adobe.photoshop": "PSD",
     "image/x-portable-anymap": "PPM",
     "application/postscript": "EPS",
+    "video/quicktime": "MOV",
+    "video/x-matroska": "MKV",
+    "video/x-msvideo": "AVI",
 }
 
 
