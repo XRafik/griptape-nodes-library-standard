@@ -11,9 +11,9 @@ sometimes credits. These helpers let a node refuse it first, from what it can re
   is already installed. They return None when the value is a remote URL, can't be found or parsed,
   or when the tool to read it is missing or too slow.
 - **Checks** (`check_count`, `check_size`, `check_dimensions`, `check_aspect_ratio`,
-  `check_aspect_ratio_range`, `check_mime_type`, `check_duration`) compare one value with a limit
-  and return a `NodeError` ready to append to `validate_before_node_run`'s list, or None when the
-  value is within the limit or unknown.
+  `check_aspect_ratio_range`, `check_mime_type`, `check_duration`, `check_frame_rate`) compare one
+  value with a limit and return a `NodeError` ready to append to `validate_before_node_run`'s list,
+  or None when the value is within the limit or unknown.
 
 A limit is enforced only where it can be read cheaply; anything else is left for the provider.
 
@@ -56,6 +56,7 @@ from PIL import Image, UnidentifiedImageError
 from static_ffmpeg import run as static_ffmpeg_run
 
 from griptape_nodes_library.media import MediaKind, coerce_media_url_or_data_uri
+from griptape_nodes_library.utils.ffmpeg_utils import _select_frame_rate
 
 logger = logging.getLogger("griptape_nodes")
 
@@ -67,6 +68,7 @@ __all__ = [
     "check_count",
     "check_dimensions",
     "check_duration",
+    "check_frame_rate",
     "check_mime_type",
     "check_size",
     "image_errors",
@@ -86,6 +88,10 @@ BYTES_PER_MB = 1024 * 1024
 ASPECT_RATIO_TOLERANCE = 0.01
 
 LIMITS_LINK_LABEL = "Provider limits"
+
+# How far past a frame-rate limit still passes, as a fraction of the limit. Providers write limits
+# like "24-60fps"; NTSC footage at 23.976 or 59.94 fps is within 0.1% of those.
+FRAME_RATE_TOLERANCE = 0.01
 
 # Validation runs on the engine's event loop, so a probe that takes longer than this is abandoned
 # and the duration check skipped.
@@ -161,27 +167,28 @@ def local_image_info(value: Any) -> ImageInfo | None:
 
 
 class VideoProbe(NamedTuple):
-    """A video's displayed frame size and duration, read with one ffprobe run.
+    """A video's displayed frame size, duration and frame rate, read with one ffprobe run.
 
-    Either part is None when ffprobe didn't report it.
+    Each part is None when ffprobe didn't report it.
     """
 
     info: ImageInfo | None
     seconds: float | None
+    fps: float | None = None
 
 
 def local_video_probe(value: Any) -> VideoProbe | None:
-    """The frame size and duration of a video input, or None if it can't be read locally.
+    """The frame size, duration and frame rate of a video input, or None if it can't be read locally.
 
-    One ffprobe run reads both, so a node checking size and duration on the same clip waits on at
-    most one `FFPROBE_TIMEOUT_SECONDS`, and the two values come from the same read of the file.
+    One ffprobe run reads all three, so a node checking several on the same clip waits on at most
+    one `FFPROBE_TIMEOUT_SECONDS`, and the values come from the same read of the file.
     Probes only a file on this machine, with an ffprobe that is already installed; see
     `_probe_local_video`.
     """
     data = _probe_local_video(value, ["-show_format", "-select_streams", "v:0", "-show_streams"])
     if data is None:
         return None
-    return VideoProbe(info=_frame_size(data), seconds=_duration(data))
+    return VideoProbe(info=_frame_size(data), seconds=_duration(data), fps=_frame_rate(data))
 
 
 def local_video_info(value: Any) -> ImageInfo | None:
@@ -223,6 +230,15 @@ def _frame_size(data: dict[str, Any]) -> ImageInfo | None:
     except (TypeError, ValueError):
         pass
     return ImageInfo(width=width, height=height, mime_type=None)
+
+
+def _frame_rate(data: dict[str, Any]) -> float | None:
+    """The first video stream's playback frame rate in ffprobe's JSON, or None."""
+    streams = data.get("streams")
+    if not streams:
+        return None
+    fps = _select_frame_rate(streams[0])
+    return fps if fps > 0 else None
 
 
 def _duration(data: dict[str, Any]) -> float | None:
@@ -508,6 +524,41 @@ def image_errors(  # noqa: PLR0913
     return [error for error in errors if error]
 
 
+def check_frame_rate(
+    fps: float | None,
+    *,
+    subject: str,
+    minimum: float | None = None,
+    maximum: float | None = None,
+    tolerance: float = FRAME_RATE_TOLERANCE,
+    docs_url: str | None = None,
+) -> NodeError | None:
+    """An error when a video's frame rate is outside what the provider accepts.
+
+    Args:
+        fps: The frame rate, from `local_video_probe`. None skips the check.
+        subject: The input, from `input_subject`.
+        minimum: The lowest frame rate accepted.
+        maximum: The highest frame rate accepted.
+        tolerance: How far past a limit, as a fraction of it, still passes. The default lets NTSC
+            footage at 23.976 fps through a "24 fps" minimum and 59.94 fps through a "60 fps" one.
+        docs_url: The provider's page documenting the limit.
+    """
+    if fps is None:
+        return None
+    if minimum is not None and fps < minimum * (1 - tolerance):
+        return _error(
+            f"{subject} is {fps:.3g} fps and the minimum is {minimum:g} fps. Re-export it at a higher frame rate.",
+            docs_url,
+        )
+    if maximum is not None and fps > maximum * (1 + tolerance):
+        return _error(
+            f"{subject} is {fps:.3g} fps and the maximum is {maximum:g} fps. Re-export it at a lower frame rate.",
+            docs_url,
+        )
+    return None
+
+
 def video_errors(  # noqa: PLR0913
     video: Any,
     *,
@@ -520,6 +571,8 @@ def video_errors(  # noqa: PLR0913
     max_megapixels: float | None = None,
     widest: str | None = None,
     tallest: str | None = None,
+    min_fps: float | None = None,
+    max_fps: float | None = None,
     duration_fix: str | None = None,
     docs_url: str | None = None,
 ) -> list[NodeError]:
@@ -527,8 +580,9 @@ def video_errors(  # noqa: PLR0913
 
     Probes the video once, with `local_video_probe`, and runs only the checks whose limits are
     given: the file size with `maximum_bytes`, the duration with `min_seconds` or `max_seconds`,
-    the displayed frame's sides and area with `min_side`, `max_side` or `max_megapixels`, and the
-    aspect ratio when both `widest` and `tallest` are set. Like the checks it runs, it skips
+    the displayed frame's sides and area with `min_side`, `max_side` or `max_megapixels`, the
+    aspect ratio when both `widest` and `tallest` are set, and the frame rate with `min_fps` or
+    `max_fps`. Like the checks it runs, it skips
     anything it can't read locally.
 
     Args:
@@ -542,6 +596,8 @@ def video_errors(  # noqa: PLR0913
         max_megapixels: The most pixels accepted in total, in millions.
         widest: The widest aspect ratio accepted, as the provider writes it, such as "2.5:1".
         tallest: The tallest aspect ratio accepted, such as "1:2.5".
+        min_fps: The lowest frame rate accepted.
+        max_fps: The highest frame rate accepted.
         duration_fix: What the artist can do about a clip of the wrong length. Defaults to
             `check_duration`'s.
         docs_url: The provider's page documenting the limits.
@@ -554,7 +610,8 @@ def video_errors(  # noqa: PLR0913
             )
         )
     needs_frame = min_side is not None or max_side is not None or max_megapixels is not None or widest is not None
-    if min_seconds is None and max_seconds is None and not needs_frame:
+    needs_fps = min_fps is not None or max_fps is not None
+    if min_seconds is None and max_seconds is None and not needs_frame and not needs_fps:
         return [error for error in errors if error]
     probe = local_video_probe(video)
     info = probe.info if probe else None
@@ -583,6 +640,12 @@ def video_errors(  # noqa: PLR0913
     if widest is not None and tallest is not None:
         errors.append(
             check_aspect_ratio_range(info, subject=subject, widest=widest, tallest=tallest, docs_url=docs_url)
+        )
+    if needs_fps:
+        errors.append(
+            check_frame_rate(
+                probe.fps if probe else None, subject=subject, minimum=min_fps, maximum=max_fps, docs_url=docs_url
+            )
         )
     return [error for error in errors if error]
 

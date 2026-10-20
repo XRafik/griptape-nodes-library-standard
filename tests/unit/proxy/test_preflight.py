@@ -25,6 +25,7 @@ from griptape_nodes_library.proxy.preflight import (
     check_count,
     check_dimensions,
     check_duration,
+    check_frame_rate,
     check_mime_type,
     check_size,
     image_errors,
@@ -197,8 +198,18 @@ class TestLocalVideoProbe:
         return runs
 
     def test_reads_size_and_duration_in_one_ffprobe_run(self, clip: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        runs = self._answer(monkeypatch, {"format": {"duration": "9.5"}, "streams": [{"width": 1920, "height": 1080}]})
-        assert local_video_probe(str(clip)) == VideoProbe(info=ImageInfo(1920, 1080, None), seconds=9.5)
+        runs = self._answer(
+            monkeypatch,
+            {
+                "format": {"duration": "9.5"},
+                "streams": [{"width": 1920, "height": 1080, "avg_frame_rate": "30000/1001"}],
+            },
+        )
+        probe = local_video_probe(str(clip))
+        assert probe is not None
+        assert probe.info == ImageInfo(1920, 1080, None)
+        assert probe.seconds == 9.5
+        assert probe.fps == pytest.approx(29.97, abs=0.01)
         assert len(runs) == 1
         assert "-show_format" in runs[0]
         assert "-show_streams" in runs[0]
@@ -207,7 +218,7 @@ class TestLocalVideoProbe:
         self, clip: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         self._answer(monkeypatch, {"format": {"duration": "4.0"}, "streams": []})
-        assert local_video_probe(str(clip)) == VideoProbe(info=None, seconds=4.0)
+        assert local_video_probe(str(clip)) == VideoProbe(info=None, seconds=4.0, fps=None)
 
     def test_skips_when_ffprobe_is_not_installed(self, clip: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(preflight, "_installed_ffprobe", lambda: None)
@@ -518,6 +529,13 @@ class TestVideoErrors:
         assert len(errors) == 1
         assert "megapixels" in str(errors[0])
 
+    def test_checks_the_frame_rate(self, clip: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(preflight, "local_video_probe", lambda _value: VideoProbe(info=None, seconds=5.0, fps=15.0))
+        errors = video_errors(str(clip), subject=SUBJECT, min_fps=24, max_fps=60)
+        assert [str(e) for e in errors] == [
+            f"{SUBJECT} is 15 fps and the minimum is 24 fps. Re-export it at a higher frame rate."
+        ]
+
     def test_uses_the_given_duration_fix(self, clip: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         self._probe(monkeypatch, None, 1.0)
         errors = video_errors(str(clip), subject=SUBJECT, min_seconds=3, duration_fix="Pick a longer clip.")
@@ -537,6 +555,25 @@ class TestVideoErrors:
             video_errors("https://example.com/clip.mp4", subject=SUBJECT, maximum_bytes=1, max_seconds=1, min_side=1)
             == []
         )
+
+
+class TestCheckFrameRate:
+    @pytest.mark.parametrize("fps", [24.0, 23.976, 30.0, 59.94, 60.0])
+    def test_allows_a_frame_rate_in_range_including_ntsc(self, fps: float) -> None:
+        assert check_frame_rate(fps, subject=SUBJECT, minimum=24, maximum=60) is None
+
+    def test_skips_an_unknown_frame_rate(self) -> None:
+        assert check_frame_rate(None, subject=SUBJECT, minimum=24) is None
+
+    def test_rejects_a_low_frame_rate(self) -> None:
+        error = check_frame_rate(15.0, subject=SUBJECT, minimum=24, maximum=60, docs_url=DOCS)
+        assert str(error) == f"{SUBJECT} is 15 fps and the minimum is 24 fps. Re-export it at a higher frame rate."
+        assert error is not None
+        assert error.links
+
+    def test_rejects_a_high_frame_rate(self) -> None:
+        error = check_frame_rate(120.0, subject=SUBJECT, minimum=24, maximum=60)
+        assert str(error) == f"{SUBJECT} is 120 fps and the maximum is 60 fps. Re-export it at a lower frame rate."
 
 
 class TestCheckMimeType:
