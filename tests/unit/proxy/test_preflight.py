@@ -235,7 +235,7 @@ class TestLocalVideoProbe:
         self, clip: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         self._answer(monkeypatch, {"format": {"duration": "4.0"}, "streams": []})
-        assert local_video_probe(str(clip)) == VideoProbe(info=None, seconds=4.0, fps=None)
+        assert local_video_probe(str(clip)) == VideoProbe(info=None, seconds=4.0, fps=None, container_seconds=4.0)
 
     def test_skips_when_ffprobe_is_not_installed(self, clip: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(preflight, "_installed_ffprobe", lambda: None)
@@ -531,6 +531,48 @@ class TestVideoErrors:
         assert [str(e) for e in errors] == [
             f"{SUBJECT} is 15 fps and the minimum is 24 fps. Re-export it at a higher frame rate."
         ]
+
+    @pytest.mark.parametrize(
+        ("stream", "container", "min_seconds", "max_seconds", "expected"),
+        [
+            # A 10 s video with a 31 s audio track: the maximum is checked against the video.
+            (10.0, 31.0, None, 30, None),
+            # A 2.9 s video with 3.5 s of audio: the minimum is checked against the longer reading.
+            (2.9, 3.5, 3, None, None),
+            # Both readings over the maximum still fail, quoting the shorter.
+            (31.0, 32.0, None, 30, "is 31.00 seconds long and the limit is 30."),
+            # Both readings under the minimum still fail, quoting the longer.
+            (2.0, 2.5, 3, None, "is 2.50 seconds long and the minimum is 3."),
+        ],
+        ids=["long-audio-under-max", "long-audio-over-min", "both-over-max", "both-under-min"],
+    )
+    def test_checks_each_bound_against_the_easier_duration(
+        self,
+        clip: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        stream: float,
+        container: float,
+        min_seconds: float | None,
+        max_seconds: float | None,
+        expected: str | None,
+    ) -> None:
+        monkeypatch.setattr(
+            preflight,
+            "local_video_probe",
+            lambda _value: VideoProbe(info=None, seconds=stream, container_seconds=container),
+        )
+        errors = video_errors(str(clip), subject=SUBJECT, min_seconds=min_seconds, max_seconds=max_seconds)
+        messages = [str(e) for e in errors]
+        if expected is None:
+            assert messages == []
+        else:
+            assert len(messages) == 1
+            assert expected in messages[0]
+
+    def test_does_not_probe_for_half_an_aspect_ratio_range(self, clip: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = self._probe(monkeypatch, ImageInfo(4000, 1000, None), 5.0)
+        assert video_errors(str(clip), subject=SUBJECT, widest="3:1") == []
+        assert calls == []
 
     def test_uses_the_given_duration_fix(self, clip: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         self._probe(monkeypatch, None, 1.0)

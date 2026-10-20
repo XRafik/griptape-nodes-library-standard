@@ -165,12 +165,16 @@ def local_image_info(value: Any) -> ImageInfo | None:
 class VideoProbe(NamedTuple):
     """A video's displayed frame size, duration and frame rate, read with one ffprobe run.
 
+    `seconds` is the video stream's duration, falling back to the container's. The container's
+    duration covers every stream, so a longer audio track can make it longer than the video;
+    `container_seconds` keeps it so a minimum can be checked against the longer of the two.
     Each part is None when ffprobe didn't report it.
     """
 
     info: ImageInfo | None
     seconds: float | None
     fps: float | None = None
+    container_seconds: float | None = None
 
 
 def local_video_probe(value: Any) -> VideoProbe | None:
@@ -184,7 +188,14 @@ def local_video_probe(value: Any) -> VideoProbe | None:
     data = _probe_local_video(value, ["-show_format", "-select_streams", "v:0", "-show_streams"])
     if data is None:
         return None
-    return VideoProbe(info=_frame_size(data), seconds=_duration(data), fps=_frame_rate(data))
+    stream_seconds = _seconds(((data.get("streams") or [{}])[0]).get("duration"))
+    container_seconds = _seconds(data.get("format", {}).get("duration"))
+    return VideoProbe(
+        info=_frame_size(data),
+        seconds=stream_seconds if stream_seconds is not None else container_seconds,
+        fps=_frame_rate(data),
+        container_seconds=container_seconds,
+    )
 
 
 def local_video_info(value: Any) -> ImageInfo | None:
@@ -237,21 +248,14 @@ def _frame_rate(data: dict[str, Any]) -> float | None:
     return fps if fps > 0 else None
 
 
-def _duration(data: dict[str, Any]) -> float | None:
-    """The first video stream's duration in ffprobe's JSON, else the container's, in seconds, or None.
-
-    The container's duration covers every stream, so a longer audio track would stretch it past the
-    video's own length.
-    """
-    streams = data.get("streams") or [{}]
-    for duration in (streams[0].get("duration"), data.get("format", {}).get("duration")):
-        if duration is None:
-            continue
-        try:
-            return float(duration)
-        except (TypeError, ValueError):
-            continue
-    return None
+def _seconds(value: Any) -> float | None:
+    """An ffprobe duration field as seconds, or None when it's missing or not a number."""
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _probe_local_video(value: Any, args: list[str]) -> dict[str, Any] | None:
@@ -586,22 +590,26 @@ def video_errors(  # noqa: PLR0913
                 local_size_bytes(video, kind="video"), maximum_bytes=maximum_bytes, subject=subject, docs_url=docs_url
             )
         )
-    needs_frame = min_side is not None or max_side is not None or max_megapixels is not None or widest is not None
+    needs_frame = (
+        min_side is not None
+        or max_side is not None
+        or max_megapixels is not None
+        or (widest is not None and tallest is not None)
+    )
     needs_fps = min_fps is not None or max_fps is not None
     if min_seconds is None and max_seconds is None and not needs_frame and not needs_fps:
         return [error for error in errors if error]
     probe = local_video_probe(video)
     info = probe.info if probe else None
-    if min_seconds is not None or max_seconds is not None:
+    # Providers don't say whether they measure the video stream or the whole container, so each
+    # bound uses the reading it's easier to meet: the shorter for a maximum, the longer for a minimum.
+    if max_seconds is not None:
         errors.append(
-            check_duration(
-                probe.seconds if probe else None,
-                subject=subject,
-                minimum=min_seconds,
-                maximum=max_seconds,
-                fix=duration_fix,
-                docs_url=docs_url,
-            )
+            check_duration(_shortest(probe), subject=subject, maximum=max_seconds, fix=duration_fix, docs_url=docs_url)
+        )
+    if min_seconds is not None:
+        errors.append(
+            check_duration(_longest(probe), subject=subject, minimum=min_seconds, fix=duration_fix, docs_url=docs_url)
         )
     if min_side is not None or max_side is not None or max_megapixels is not None:
         errors.append(
@@ -625,6 +633,18 @@ def video_errors(  # noqa: PLR0913
             )
         )
     return [error for error in errors if error]
+
+
+def _shortest(probe: VideoProbe | None) -> float | None:
+    """The shorter of a probe's stream and container durations, or None if it has neither."""
+    readings = [s for s in (probe.seconds, probe.container_seconds) if s is not None] if probe else []
+    return min(readings, default=None)
+
+
+def _longest(probe: VideoProbe | None) -> float | None:
+    """The longer of a probe's stream and container durations, or None if it has neither."""
+    readings = [s for s in (probe.seconds, probe.container_seconds) if s is not None] if probe else []
+    return max(readings, default=None)
 
 
 def _error(message: str, docs_url: str | None) -> NodeError:
