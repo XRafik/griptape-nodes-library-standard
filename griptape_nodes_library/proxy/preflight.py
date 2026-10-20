@@ -90,7 +90,7 @@ LIMITS_LINK_LABEL = "Provider limits"
 FRAME_RATE_TOLERANCE = 0.01
 
 # Validation runs on the engine's event loop, so a probe that takes longer than this is abandoned
-# and the duration check skipped.
+# and the checks that need it (frame size, duration, frame rate) are skipped.
 FFPROBE_TIMEOUT_SECONDS = 5
 
 
@@ -411,9 +411,9 @@ def check_mime_type(
     """
     if mime_type is None or mime_type in allowed:
         return None
-    formats = _join_or([name.split("/", 1)[-1].upper() for name in allowed])
-    current = mime_type.split("/", 1)[-1].upper()
-    return _error(f"{subject} is a {current} file. Convert it to {formats}.", docs_url)
+    formats = _join_or([_format_name(name) for name in allowed])
+    current = _format_name(mime_type)
+    return _error(f"{subject} is {_article(current)} {current} file. Convert it to {formats}.", docs_url)
 
 
 def check_duration(  # noqa: PLR0913
@@ -529,12 +529,14 @@ def check_frame_rate(
         return None
     if minimum is not None and fps < minimum * (1 - tolerance):
         return _error(
-            f"{subject} is {fps:.3g} fps and the minimum is {minimum:g} fps. Re-export it at a higher frame rate.",
+            f"{subject} is {_format_past(fps, minimum, 0)} fps and the minimum is "
+            f"{_format_limit(minimum, round_up=True)} fps. Re-export it at a higher frame rate.",
             docs_url,
         )
     if maximum is not None and fps > maximum * (1 + tolerance):
         return _error(
-            f"{subject} is {fps:.3g} fps and the maximum is {maximum:g} fps. Re-export it at a lower frame rate.",
+            f"{subject} is {_format_past(fps, maximum, 0)} fps and the maximum is {_format_limit(maximum)} fps. "
+            "Re-export it at a lower frame rate.",
             docs_url,
         )
     return None
@@ -712,6 +714,20 @@ def _format_past(value: float, limit: float, decimals: int) -> str:
         if rounded != shown_limit and (rounded > shown_limit) == over:
             return text
     return repr(value)
+
+
+def _format_name(mime_type: str) -> str:
+    """A MIME type's format as a message shows it: "image/x-icon" reads "ICON"."""
+    return mime_type.split("/", 1)[-1].removeprefix("x-").removeprefix("vnd.").upper()
+
+
+# Letters whose spoken name starts with a vowel sound, so a format read letter by letter takes "an":
+# "an AVIF file", "an MOV file", "an HEIC file".
+_VOWEL_SOUND_LETTERS = frozenset("AEFHILMNORSX")
+
+
+def _article(format_name: str) -> str:
+    return "an" if format_name[:1] in _VOWEL_SOUND_LETTERS else "a"
 
 
 def _parse_ratio(name: str) -> float:

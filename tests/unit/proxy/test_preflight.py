@@ -609,6 +609,14 @@ class TestCheckFrameRate:
         assert error is not None
         assert error.links
 
+    def test_prints_a_very_high_frame_rate_in_full(self) -> None:
+        error = check_frame_rate(1000.0, subject=SUBJECT, maximum=60)
+        assert str(error).startswith(f"{SUBJECT} is 1000 fps and the maximum is 60 fps.")
+
+    def test_never_prints_a_frame_rate_as_equal_to_the_limit(self) -> None:
+        error = check_frame_rate(23.97, subject=SUBJECT, minimum=24, tolerance=0.001)
+        assert str(error).startswith(f"{SUBJECT} is 23.97 fps and the minimum is 24 fps.")
+
     def test_rejects_a_high_frame_rate(self) -> None:
         error = check_frame_rate(120.0, subject=SUBJECT, minimum=24, maximum=60)
         assert str(error) == f"{SUBJECT} is 120 fps and the maximum is 60 fps. Re-export it at a lower frame rate."
@@ -624,6 +632,20 @@ class TestCheckMimeType:
     def test_rejects_an_unlisted_type(self) -> None:
         error = check_mime_type("image/webp", subject=SUBJECT, allowed=("image/jpeg", "image/png"))
         assert str(error) == f"{SUBJECT} is a WEBP file. Convert it to JPEG or PNG."
+
+    @pytest.mark.parametrize(
+        ("mime_type", "expected"),
+        [
+            ("image/avif", "is an AVIF file."),
+            ("image/heic", "is an HEIC file."),
+            ("image/x-icon", "is an ICON file."),
+            ("image/tiff", "is a TIFF file."),
+        ],
+        ids=["vowel-sound", "letter-h", "strips-x-prefix", "consonant"],
+    )
+    def test_names_the_format_with_the_right_article(self, mime_type: str, expected: str) -> None:
+        error = check_mime_type(mime_type, subject=SUBJECT, allowed=("image/jpeg", "image/png"))
+        assert str(error) == f"{SUBJECT} {expected} Convert it to JPEG or PNG."
 
 
 class TestCheckDuration:
