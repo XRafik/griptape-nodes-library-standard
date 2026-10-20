@@ -19,7 +19,6 @@ from griptape_nodes.retained_mode.events.variable_events import (
     SetVariableValueResultSuccess,
 )
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
-from griptape_nodes.retained_mode.variable_types import VariableScope
 from griptape_nodes.traits.button import Button, ButtonDetailsMessagePayload
 
 from griptape_nodes_library.variables.base_variable_node import BaseVariableNode
@@ -175,11 +174,18 @@ class SetVariable(BaseVariableNode):
         return value
 
     def _eager_create_variable(self, variable_name: str) -> None:
-        """Create the variable in the engine if it does not already exist in this flow."""
+        """Create the variable in the engine if it isn't already visible from this node's flow.
+
+        Checks at this node's own scope (hierarchical by default), not ``CURRENT_FLOW_ONLY``:
+        a loop body's packaged flow and a node group's structural subflow are both children
+        of the user's flow, so a variable the user already created there is visible
+        here too. Checking only the immediate flow would create a shadow copy that the real
+        variable's reads and writes could never reach.
+        """
         current_flow_name = _get_flow_for_node(self.name)
 
-        if has_variable(node_name=self.name, variable_name=variable_name, scope=VariableScope.CURRENT_FLOW_ONLY):
-            # Already exists in this flow; adopt it silently.
+        if has_variable(node_name=self.name, variable_name=variable_name, scope=self._get_scope()):
+            # Already visible from here (in this flow or an ancestor); adopt it silently.
             return
 
         initial_value = self.get_parameter_value(self.value_param.name)
@@ -198,20 +204,23 @@ class SetVariable(BaseVariableNode):
             raise RuntimeError(msg)  # noqa: TRY004
 
     def _try_sync_variable_type(self, new_type: str) -> None:
-        """Best-effort update of the engine-side variable's type; silent on any failure."""
+        """Best-effort update of the engine-side variable's type; silent on any failure.
+
+        Looks the variable up at this node's own scope, the same scope ``_eager_create_variable``
+        and ``aprocess`` use, so the variable whose type is updated is the one this node writes.
+        """
         try:
             variable_name = self._resolve_variable_name()
             if not variable_name:
                 return
             current_flow_name = _get_flow_for_node(self.name)
-            if not has_variable(
-                node_name=self.name, variable_name=variable_name, scope=VariableScope.CURRENT_FLOW_ONLY
-            ):
+            scope = self._get_scope()
+            if not has_variable(node_name=self.name, variable_name=variable_name, scope=scope):
                 return
             type_request = SetVariableTypeRequest(
                 name=variable_name,
                 type=new_type,
-                lookup_scope=VariableScope.CURRENT_FLOW_ONLY,
+                lookup_scope=scope,
                 starting_flow=current_flow_name,
             )
             type_result = GriptapeNodes.handle_request(type_request)
