@@ -667,7 +667,7 @@ async def _astra_payload(monkeypatch: pytest.MonkeyPatch, node: TopazVideoUpscal
 async def test_astra_payload_carries_the_creative_filters(monkeypatch: pytest.MonkeyPatch) -> None:
     payload = await _astra_payload(monkeypatch, _astra_node())
 
-    assert payload["filters"] == [{"creativity": 0.5, "sharp": 0.5, "realism": 0.5}]
+    assert payload["filters"] == [{"creativity": 0.5, "sharp": 0.5}]
 
 
 @pytest.mark.asyncio
@@ -694,13 +694,23 @@ async def test_astra_creative_values_reach_the_filter_verbatim(monkeypatch: pyte
     node = _astra_node()
     node.set_parameter_value("creativity", 0.9)
     node.set_parameter_value("sharp", 0.1)
-    node.set_parameter_value("realism", 0.75)
 
     payload = await _astra_payload(monkeypatch, node)
 
     assert payload["filters"][0]["creativity"] == 0.9
     assert payload["filters"][0]["sharp"] == 0.1
-    assert payload["filters"][0]["realism"] == 0.75
+
+
+@pytest.mark.asyncio
+async def test_astra_filters_never_send_realism(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Topaz dropped `realism` from Astra 2. The parameter stays so saved workflows
+    # that set it still load, but its value is ignored.
+    node = _astra_node()
+    node.set_parameter_value("realism", 0.75)
+
+    payload = await _astra_payload(monkeypatch, node)
+
+    assert "realism" not in payload["filters"][0]
 
 
 @pytest.mark.asyncio
@@ -956,6 +966,26 @@ def test_switching_back_to_starlight_hides_them_again() -> None:
 
     for name in ASTRA_FILTER_PARAMS:
         assert _hidden(node, name), f"{name} should be hidden again for Starlight"
+
+
+def test_realism_stays_hidden_for_astra() -> None:
+    # Topaz dropped `realism` from Astra 2; a visible slider would do nothing.
+    node = _astra_node()
+
+    assert _hidden(node, "realism")
+
+
+def test_realism_stays_hidden_when_a_saved_workflow_unhides_it() -> None:
+    # Saved workflows replay each parameter's ui_options, including `hide: False`, and
+    # set the model with initial_setup=True, which skips after_value_set.
+    node = _node()
+    realism_param = node.get_parameter_by_name("realism")
+    assert realism_param is not None
+
+    realism_param.ui_options = {"slider": {"min_val": 0.0, "max_val": 1.0}, "hide": False}
+    node.set_parameter_value("model", ASTRA_MODEL, initial_setup=True)
+
+    assert _hidden(node, "realism")
 
 
 def test_selecting_astra_does_not_disturb_the_resize_fields() -> None:
