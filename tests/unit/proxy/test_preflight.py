@@ -8,7 +8,7 @@ import subprocess
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 from griptape.artifacts import ImageArtifact, ImageUrlArtifact
@@ -27,6 +27,7 @@ from griptape_nodes_library.proxy.preflight import (
     check_duration,
     check_mime_type,
     check_size,
+    image_errors,
     input_subject,
     local_image_info,
     local_size_bytes,
@@ -393,6 +394,58 @@ class TestCheckAspectRatioRange:
 
     def test_skips_an_unknown_image(self) -> None:
         assert check_aspect_ratio_range(None, subject=SUBJECT, widest="3:1", tallest="1:3") is None
+
+
+class TestImageErrors:
+    LIMITS: ClassVar[dict[str, Any]] = {
+        "allowed_mime_types": ("image/jpeg", "image/png"),
+        "maximum_bytes": 10 * 1024 * 1024,
+        "min_side": 300,
+        "widest": "2.5:1",
+        "tallest": "1:2.5",
+    }
+
+    def test_accepts_an_image_within_every_limit(self) -> None:
+        assert image_errors(_data_uri(_png_bytes(800, 600)), subject=SUBJECT, **self.LIMITS) == []
+
+    def test_reports_every_limit_the_image_breaks(self) -> None:
+        buffer = BytesIO()
+        Image.new("RGB", (200, 1000)).save(buffer, format="GIF")
+        messages = [
+            str(e) for e in image_errors(_data_uri(buffer.getvalue(), "image/gif"), subject=SUBJECT, **self.LIMITS)
+        ]
+        assert messages == [
+            f"{SUBJECT} is a GIF file. Convert it to JPEG or PNG.",
+            f"{SUBJECT} is 200x1000 and each side must be at least 300 pixels. Use a larger one.",
+            f"{SUBJECT} is 200x1000, which is too tall. The aspect ratio must be between 1:2.5 and 2.5:1. Crop it.",
+        ]
+
+    def test_runs_only_the_checks_whose_limits_are_given(self) -> None:
+        image = _data_uri(_png_bytes(100, 1000))
+        assert image_errors(image, subject=SUBJECT, allowed_mime_types=("image/png",)) == []
+        assert [str(e) for e in image_errors(image, subject=SUBJECT, min_side=300)] == [
+            f"{SUBJECT} is 100x1000 and each side must be at least 300 pixels. Use a larger one."
+        ]
+
+    def test_checks_the_size(self) -> None:
+        errors = image_errors(_data_uri(_png_bytes(800, 600)), subject=SUBJECT, maximum_bytes=10)
+        assert len(errors) == 1
+        assert "and the limit is" in str(errors[0])
+
+    def test_stops_after_a_wrong_format_when_asked(self) -> None:
+        buffer = BytesIO()
+        Image.new("RGB", (200, 1000)).save(buffer, format="GIF")
+        image = _data_uri(buffer.getvalue(), "image/gif")
+        errors = image_errors(image, subject=SUBJECT, stop_after_format=True, **self.LIMITS)
+        assert [str(e) for e in errors] == [f"{SUBJECT} is a GIF file. Convert it to JPEG or PNG."]
+
+    def test_links_the_docs_page(self) -> None:
+        errors = image_errors(_data_uri(_png_bytes(100, 100)), subject=SUBJECT, min_side=300, docs_url=DOCS)
+        assert errors[0].links
+        assert errors[0].links[0].url == DOCS
+
+    def test_skips_a_remote_image(self) -> None:
+        assert image_errors("https://example.com/image.gif", subject=SUBJECT, **self.LIMITS) == []
 
 
 class TestCheckMimeType:

@@ -13,7 +13,8 @@ There are two halves:
   or too slow, and the matching check then skips. A provider limit is only enforced
   where it can be read cheaply; anything else is left for the provider to enforce.
 - **Checks** (`check_count`, `check_size`, `check_dimensions`, `check_aspect_ratio`,
-  `check_aspect_ratio_range`, `check_mime_type`, `check_duration`) compare a value with a limit and return a `NodeError` ready to
+  `check_aspect_ratio_range`, `check_mime_type`, `check_duration`, and `image_errors`, which runs
+  every image check a provider documents in one call) compare a value with a limit and return a `NodeError` ready to
   append to `validate_before_node_run`'s list, or None when the value is within the limit or
   unknown.
 
@@ -64,6 +65,7 @@ __all__ = [
     "check_duration",
     "check_mime_type",
     "check_size",
+    "image_errors",
     "input_subject",
     "local_image_info",
     "local_size_bytes",
@@ -442,6 +444,63 @@ def check_duration(  # noqa: PLR0913
             docs_url,
         )
     return None
+
+
+def image_errors(  # noqa: PLR0913
+    image: Any,
+    *,
+    subject: str,
+    allowed_mime_types: Sequence[str] = (),
+    maximum_bytes: int | None = None,
+    min_side: int | None = None,
+    max_side: int | None = None,
+    widest: str | None = None,
+    tallest: str | None = None,
+    docs_url: str | None = None,
+    stop_after_format: bool = False,
+) -> list[NodeError]:
+    """Every provider image limit an image input breaks, in one call.
+
+    Reads the image once and runs only the checks whose limits are given: the format when
+    `allowed_mime_types` is set, the file size with `maximum_bytes`, the sides with `min_side` or
+    `max_side`, and the aspect ratio when both `widest` and `tallest` are set. Like the checks it
+    runs, it skips anything it can't read locally.
+
+    Args:
+        image: The image input.
+        subject: The input, from `input_subject`.
+        allowed_mime_types: The formats the provider accepts, such as ("image/jpeg", "image/png").
+        maximum_bytes: The largest file the provider accepts.
+        min_side: The fewest pixels accepted for the width and for the height.
+        max_side: The most pixels accepted for the width and for the height.
+        widest: The widest aspect ratio accepted, as the provider writes it, such as "2.5:1".
+        tallest: The tallest aspect ratio accepted, such as "1:2.5".
+        docs_url: The provider's page documenting the limits.
+        stop_after_format: Report only the format error when the format is wrong, for a node whose
+            later steps would convert the image anyway.
+    """
+    info = local_image_info(image)
+    errors: list[NodeError | None] = []
+    if allowed_mime_types:
+        format_error = check_mime_type(
+            info.mime_type if info else None, subject=subject, allowed=allowed_mime_types, docs_url=docs_url
+        )
+        if format_error and stop_after_format:
+            return [format_error]
+        errors.append(format_error)
+    if maximum_bytes is not None:
+        errors.append(
+            check_size(
+                local_size_bytes(image, kind="image"), maximum_bytes=maximum_bytes, subject=subject, docs_url=docs_url
+            )
+        )
+    if min_side is not None or max_side is not None:
+        errors.append(check_dimensions(info, subject=subject, min_side=min_side, max_side=max_side, docs_url=docs_url))
+    if widest is not None and tallest is not None:
+        errors.append(
+            check_aspect_ratio_range(info, subject=subject, widest=widest, tallest=tallest, docs_url=docs_url)
+        )
+    return [error for error in errors if error]
 
 
 def _error(message: str, docs_url: str | None) -> NodeError:
