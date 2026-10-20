@@ -34,6 +34,7 @@ from griptape_nodes_library.proxy.preflight import (
     local_video_duration,
     local_video_info,
     local_video_probe,
+    video_errors,
 )
 
 SUBJECT = "Image 2 in 'reference images'"
@@ -446,6 +447,96 @@ class TestImageErrors:
 
     def test_skips_a_remote_image(self) -> None:
         assert image_errors("https://example.com/image.gif", subject=SUBJECT, **self.LIMITS) == []
+
+
+class TestVideoErrors:
+    @pytest.fixture
+    def clip(self, tmp_path: Path) -> Path:
+        path = tmp_path / "clip.mp4"
+        path.write_bytes(b"video")
+        return path
+
+    def _probe(self, monkeypatch: pytest.MonkeyPatch, info: ImageInfo | None, seconds: float | None) -> list[Any]:
+        calls: list[Any] = []
+
+        def fake_probe(value: Any) -> VideoProbe:
+            calls.append(value)
+            return VideoProbe(info=info, seconds=seconds)
+
+        monkeypatch.setattr(preflight, "local_video_probe", fake_probe)
+        return calls
+
+    def test_accepts_a_video_within_every_limit(self, clip: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._probe(monkeypatch, ImageInfo(1280, 720, None), 5.0)
+        assert (
+            video_errors(
+                str(clip),
+                subject=SUBJECT,
+                maximum_bytes=1024,
+                min_seconds=2,
+                max_seconds=30,
+                min_side=200,
+                max_side=2048,
+                widest="3:1",
+                tallest="1:3",
+            )
+            == []
+        )
+
+    def test_reports_every_limit_the_video_breaks_from_one_probe(
+        self, clip: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = self._probe(monkeypatch, ImageInfo(4000, 1000, None), 40.0)
+        messages = [
+            str(e)
+            for e in video_errors(
+                str(clip),
+                subject=SUBJECT,
+                max_seconds=30,
+                max_side=2048,
+                widest="3:1",
+                tallest="1:3",
+            )
+        ]
+        assert messages == [
+            f"{SUBJECT} is 40.00 seconds long and the limit is 30. Use a Trim Video node to shorten it.",
+            f"{SUBJECT} is 4000x1000 and each side must be at most 2048 pixels. Resize it smaller.",
+            f"{SUBJECT} is 4000x1000, which is too wide. The aspect ratio must be between 1:3 and 3:1. Crop it.",
+        ]
+        assert len(calls) == 1
+
+    def test_checks_the_size_without_probing(self, clip: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = self._probe(monkeypatch, ImageInfo(1280, 720, None), 5.0)
+        errors = video_errors(str(clip), subject=SUBJECT, maximum_bytes=1)
+        assert len(errors) == 1
+        assert "and the limit is" in str(errors[0])
+        assert calls == []
+
+    def test_checks_the_area(self, clip: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._probe(monkeypatch, ImageInfo(4000, 2100, None), 5.0)
+        errors = video_errors(str(clip), subject=SUBJECT, max_megapixels=8.2944)
+        assert len(errors) == 1
+        assert "megapixels" in str(errors[0])
+
+    def test_uses_the_given_duration_fix(self, clip: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._probe(monkeypatch, None, 1.0)
+        errors = video_errors(str(clip), subject=SUBJECT, min_seconds=3, duration_fix="Pick a longer clip.")
+        assert [str(e) for e in errors] == [f"{SUBJECT} is 1.00 seconds long and the minimum is 3. Pick a longer clip."]
+
+    def test_links_the_docs_page(self, clip: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._probe(monkeypatch, ImageInfo(100, 100, None), 5.0)
+        errors = video_errors(str(clip), subject=SUBJECT, min_side=200, docs_url=DOCS)
+        assert errors[0].links
+        assert errors[0].links[0].url == DOCS
+
+    def test_skips_a_remote_video(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            preflight.subprocess, "run", lambda *_a, **_k: pytest.fail("a remote video must not be probed")
+        )
+        assert (
+            video_errors("https://example.com/clip.mp4", subject=SUBJECT, maximum_bytes=1, max_seconds=1, min_side=1)
+            == []
+        )
 
 
 class TestCheckMimeType:

@@ -3,29 +3,33 @@
 A proxy request a provider is certain to reject still costs the artist an upload and a wait, and
 sometimes credits. These helpers let a node refuse it first, from what it can read locally.
 
-There are two halves:
-
+- **Combined checks** (`image_errors`, `video_errors`) run every image or video check a provider
+  documents in one call, reading the input once. Most nodes need only these.
 - **Readers** (`local_size_bytes`, `local_image_info`, `local_video_probe`, `local_video_info`,
-  `local_video_duration`) read one property of
-  a media input from data already on this machine. None of them makes a network call or downloads a
-  tool: the video reader uses ffprobe only if it is already installed. They return None when the
-  value is a remote URL, can't be found, or can't be parsed, or when the tool to read it is missing
-  or too slow, and the matching check then skips. A provider limit is only enforced
-  where it can be read cheaply; anything else is left for the provider to enforce.
+  `local_video_duration`) read one property of a media input from data already on this machine.
+  None of them makes a network call or downloads a tool: the video readers use ffprobe only if it
+  is already installed. They return None when the value is a remote URL, can't be found or parsed,
+  or when the tool to read it is missing or too slow.
 - **Checks** (`check_count`, `check_size`, `check_dimensions`, `check_aspect_ratio`,
-  `check_aspect_ratio_range`, `check_mime_type`, `check_duration`, and `image_errors`, which runs
-  every image check a provider documents in one call) compare a value with a limit and return a `NodeError` ready to
-  append to `validate_before_node_run`'s list, or None when the value is within the limit or
-  unknown.
+  `check_aspect_ratio_range`, `check_mime_type`, `check_duration`) compare one value with a limit
+  and return a `NodeError` ready to append to `validate_before_node_run`'s list, or None when the
+  value is within the limit or unknown.
+
+A limit is enforced only where it can be read cheaply; anything else is left for the provider.
 
 ```python
 def validate_before_node_run(self) -> list[Exception] | None:
     exceptions = super().validate_before_node_run() or []
     for position, image in enumerate(self.get_parameter_list_value("reference_images"), start=1):
-        subject = input_subject("reference images", noun="image", position=position)
-        error = check_size(local_size_bytes(image, kind="image"), maximum_bytes=MAX_BYTES, subject=subject)
-        if error:
-            exceptions.append(error)
+        exceptions.extend(
+            image_errors(
+                image,
+                subject=input_subject("reference images", noun="image", position=position),
+                allowed_mime_types=("image/jpeg", "image/png"),
+                maximum_bytes=MAX_BYTES,
+                docs_url=LIMITS_URL,
+            )
+        )
     return exceptions or None
 ```
 """
@@ -72,6 +76,7 @@ __all__ = [
     "local_video_duration",
     "local_video_info",
     "local_video_probe",
+    "video_errors",
 ]
 
 BYTES_PER_MB = 1024 * 1024
@@ -496,6 +501,85 @@ def image_errors(  # noqa: PLR0913
         )
     if min_side is not None or max_side is not None:
         errors.append(check_dimensions(info, subject=subject, min_side=min_side, max_side=max_side, docs_url=docs_url))
+    if widest is not None and tallest is not None:
+        errors.append(
+            check_aspect_ratio_range(info, subject=subject, widest=widest, tallest=tallest, docs_url=docs_url)
+        )
+    return [error for error in errors if error]
+
+
+def video_errors(  # noqa: PLR0913
+    video: Any,
+    *,
+    subject: str,
+    maximum_bytes: int | None = None,
+    min_seconds: float | None = None,
+    max_seconds: float | None = None,
+    min_side: int | None = None,
+    max_side: int | None = None,
+    max_megapixels: float | None = None,
+    widest: str | None = None,
+    tallest: str | None = None,
+    duration_fix: str | None = None,
+    docs_url: str | None = None,
+) -> list[NodeError]:
+    """Every provider video limit a video input breaks, in one call.
+
+    Probes the video once, with `local_video_probe`, and runs only the checks whose limits are
+    given: the file size with `maximum_bytes`, the duration with `min_seconds` or `max_seconds`,
+    the displayed frame's sides and area with `min_side`, `max_side` or `max_megapixels`, and the
+    aspect ratio when both `widest` and `tallest` are set. Like the checks it runs, it skips
+    anything it can't read locally.
+
+    Args:
+        video: The video input.
+        subject: The input, from `input_subject`.
+        maximum_bytes: The largest file the provider accepts.
+        min_seconds: The shortest clip accepted.
+        max_seconds: The longest clip accepted.
+        min_side: The fewest pixels accepted for the width and for the height.
+        max_side: The most pixels accepted for the width and for the height.
+        max_megapixels: The most pixels accepted in total, in millions.
+        widest: The widest aspect ratio accepted, as the provider writes it, such as "2.5:1".
+        tallest: The tallest aspect ratio accepted, such as "1:2.5".
+        duration_fix: What the artist can do about a clip of the wrong length. Defaults to
+            `check_duration`'s.
+        docs_url: The provider's page documenting the limits.
+    """
+    errors: list[NodeError | None] = []
+    if maximum_bytes is not None:
+        errors.append(
+            check_size(
+                local_size_bytes(video, kind="video"), maximum_bytes=maximum_bytes, subject=subject, docs_url=docs_url
+            )
+        )
+    needs_frame = min_side is not None or max_side is not None or max_megapixels is not None or widest is not None
+    if min_seconds is None and max_seconds is None and not needs_frame:
+        return [error for error in errors if error]
+    probe = local_video_probe(video)
+    info = probe.info if probe else None
+    if min_seconds is not None or max_seconds is not None:
+        errors.append(
+            check_duration(
+                probe.seconds if probe else None,
+                subject=subject,
+                minimum=min_seconds,
+                maximum=max_seconds,
+                fix=duration_fix,
+                docs_url=docs_url,
+            )
+        )
+    if min_side is not None or max_side is not None or max_megapixels is not None:
+        errors.append(
+            check_dimensions(
+                info,
+                subject=subject,
+                min_side=min_side,
+                max_side=max_side,
+                max_megapixels=max_megapixels,
+                docs_url=docs_url,
+            )
+        )
     if widest is not None and tallest is not None:
         errors.append(
             check_aspect_ratio_range(info, subject=subject, widest=widest, tallest=tallest, docs_url=docs_url)
