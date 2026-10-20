@@ -438,7 +438,7 @@ def check_mime_type(
         return None
     formats = _join_or([_format_name(name) for name in allowed])
     current = _format_name(mime_type)
-    return _error(f"{subject} is {_article(current)} {current} file. Convert it to {formats}.", docs_url)
+    return _error(f"{subject} is in {current} format. Convert it to {formats}.", docs_url)
 
 
 def check_duration(  # noqa: PLR0913
@@ -485,6 +485,7 @@ def image_errors(  # noqa: PLR0913
     maximum_bytes: int | None = None,
     min_side: int | None = None,
     max_side: int | None = None,
+    max_megapixels: float | None = None,
     widest: str | None = None,
     tallest: str | None = None,
     docs_url: str | None = None,
@@ -492,8 +493,9 @@ def image_errors(  # noqa: PLR0913
     """Every provider image limit an image input breaks, in one call.
 
     Reads the image once and runs only the checks whose limits are given: the format when
-    `allowed_mime_types` is set, the file size with `maximum_bytes`, the sides with `min_side` or
-    `max_side`, and the aspect ratio when both `widest` and `tallest` are set. Like the checks it
+    `allowed_mime_types` is set, the file size with `maximum_bytes`, the sides and area with
+    `min_side`, `max_side` or `max_megapixels`, and the aspect ratio when both `widest` and
+    `tallest` are set. Like the checks it
     runs, it skips anything it can't read locally.
 
     Args:
@@ -503,6 +505,7 @@ def image_errors(  # noqa: PLR0913
         maximum_bytes: The largest file the provider accepts.
         min_side: The fewest pixels accepted for the width and for the height.
         max_side: The most pixels accepted for the width and for the height.
+        max_megapixels: The most pixels accepted in total, in millions.
         widest: The widest aspect ratio accepted, as the provider writes it, such as "2.5:1".
         tallest: The tallest aspect ratio accepted, such as "1:2.5".
         docs_url: The provider's page documenting the limits.
@@ -521,8 +524,17 @@ def image_errors(  # noqa: PLR0913
                 local_size_bytes(image, kind="image"), maximum_bytes=maximum_bytes, subject=subject, docs_url=docs_url
             )
         )
-    if min_side is not None or max_side is not None:
-        errors.append(check_dimensions(info, subject=subject, min_side=min_side, max_side=max_side, docs_url=docs_url))
+    if min_side is not None or max_side is not None or max_megapixels is not None:
+        errors.append(
+            check_dimensions(
+                info,
+                subject=subject,
+                min_side=min_side,
+                max_side=max_side,
+                max_megapixels=max_megapixels,
+                docs_url=docs_url,
+            )
+        )
     if widest is not None and tallest is not None:
         errors.append(
             check_aspect_ratio_range(info, subject=subject, widest=widest, tallest=tallest, docs_url=docs_url)
@@ -756,11 +768,6 @@ _FORMAT_NAMES = {
 def _format_name(mime_type: str) -> str:
     """A MIME type's format as a message shows it: "image/x-icon" reads "ICON"."""
     return _FORMAT_NAMES.get(mime_type) or mime_type.split("/", 1)[-1].removeprefix("x-").removeprefix("vnd.").upper()
-
-
-def _article(format_name: str) -> str:
-    """ "an" before a format name starting with a vowel ("an AVIF file"), else "a" ("a MOV file")."""
-    return "an" if format_name[:1] in "AEIOU" else "a"
 
 
 def _parse_ratio(name: str) -> float:

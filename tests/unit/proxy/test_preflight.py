@@ -442,7 +442,7 @@ class TestImageErrors:
             str(e) for e in image_errors(_data_uri(buffer.getvalue(), "image/gif"), subject=SUBJECT, **self.LIMITS)
         ]
         assert messages == [
-            f"{SUBJECT} is a GIF file. Convert it to JPEG or PNG.",
+            f"{SUBJECT} is in GIF format. Convert it to JPEG or PNG.",
             f"{SUBJECT} is 200x1000 and each side must be at least 300 pixels. Use a larger one.",
             f"{SUBJECT} is 200x1000, which is too tall. The aspect ratio must be between 1:2.5 and 2.5:1. Crop it.",
         ]
@@ -452,6 +452,12 @@ class TestImageErrors:
         assert image_errors(image, subject=SUBJECT, allowed_mime_types=("image/png",)) == []
         assert [str(e) for e in image_errors(image, subject=SUBJECT, min_side=300)] == [
             f"{SUBJECT} is 100x1000 and each side must be at least 300 pixels. Use a larger one."
+        ]
+
+    def test_checks_the_area(self) -> None:
+        errors = image_errors(_data_uri(_png_bytes(400, 300)), subject=SUBJECT, max_megapixels=0.1)
+        assert [str(e) for e in errors] == [
+            f"{SUBJECT} is 400x300 (0.12 megapixels) and the limit is 0.1 megapixels. Resize it smaller."
         ]
 
     def test_checks_the_size(self) -> None:
@@ -677,25 +683,24 @@ class TestCheckMimeType:
 
     def test_rejects_an_unlisted_type(self) -> None:
         error = check_mime_type("image/webp", subject=SUBJECT, allowed=("image/jpeg", "image/png"))
-        assert str(error) == f"{SUBJECT} is a WEBP file. Convert it to JPEG or PNG."
+        assert str(error) == f"{SUBJECT} is in WEBP format. Convert it to JPEG or PNG."
 
     @pytest.mark.parametrize(
-        ("mime_type", "expected"),
+        ("mime_type", "name"),
         [
-            ("image/avif", "is an AVIF file."),
-            ("image/heic", "is a HEIC file."),
-            ("image/x-icon", "is an ICON file."),
-            ("image/tiff", "is a TIFF file."),
-            ("image/vnd.adobe.photoshop", "is a PSD file."),
-            ("video/quicktime", "is a MOV file."),
-            ("video/x-matroska", "is a MKV file."),
-            ("video/x-msvideo", "is an AVI file."),
+            ("image/avif", "AVIF"),
+            ("image/x-icon", "ICON"),
+            ("image/vnd.adobe.photoshop", "PSD"),
+            ("video/mp4", "MP4"),
+            ("video/quicktime", "MOV"),
+            ("video/x-matroska", "MKV"),
+            ("video/x-msvideo", "AVI"),
         ],
-        ids=["vowel", "consonant-h", "strips-x-prefix", "consonant", "known-name", "mov", "mkv", "avi"],
+        ids=["subtype", "strips-x-prefix", "known-name", "mp4", "mov", "mkv", "avi"],
     )
-    def test_names_the_format_with_the_right_article(self, mime_type: str, expected: str) -> None:
+    def test_names_the_format_the_way_artists_know_it(self, mime_type: str, name: str) -> None:
         error = check_mime_type(mime_type, subject=SUBJECT, allowed=("image/jpeg", "image/png"))
-        assert str(error) == f"{SUBJECT} {expected} Convert it to JPEG or PNG."
+        assert str(error) == f"{SUBJECT} is in {name} format. Convert it to JPEG or PNG."
 
 
 class TestCheckDuration:
