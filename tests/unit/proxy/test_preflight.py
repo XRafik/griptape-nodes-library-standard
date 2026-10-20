@@ -683,15 +683,15 @@ class TestCheckMimeType:
         ("mime_type", "expected"),
         [
             ("image/avif", "is an AVIF file."),
-            ("image/heic", "is an HEIC file."),
+            ("image/heic", "is a HEIC file."),
             ("image/x-icon", "is an ICON file."),
             ("image/tiff", "is a TIFF file."),
             ("image/vnd.adobe.photoshop", "is a PSD file."),
-            ("video/quicktime", "is an MOV file."),
-            ("video/x-matroska", "is an MKV file."),
+            ("video/quicktime", "is a MOV file."),
+            ("video/x-matroska", "is a MKV file."),
             ("video/x-msvideo", "is an AVI file."),
         ],
-        ids=["vowel-sound", "letter-h", "strips-x-prefix", "consonant", "known-name", "mov", "mkv", "avi"],
+        ids=["vowel", "consonant-h", "strips-x-prefix", "consonant", "known-name", "mov", "mkv", "avi"],
     )
     def test_names_the_format_with_the_right_article(self, mime_type: str, expected: str) -> None:
         error = check_mime_type(mime_type, subject=SUBJECT, allowed=("image/jpeg", "image/png"))

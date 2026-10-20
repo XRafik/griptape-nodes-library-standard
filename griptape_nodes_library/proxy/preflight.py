@@ -758,13 +758,9 @@ def _format_name(mime_type: str) -> str:
     return _FORMAT_NAMES.get(mime_type) or mime_type.split("/", 1)[-1].removeprefix("x-").removeprefix("vnd.").upper()
 
 
-# Letters whose spoken name starts with a vowel sound, so a format read letter by letter takes "an":
-# "an AVIF file", "an MOV file", "an HEIC file".
-_VOWEL_SOUND_LETTERS = frozenset("AEFHILMNORSX")
-
-
 def _article(format_name: str) -> str:
-    return "an" if format_name[:1] in _VOWEL_SOUND_LETTERS else "a"
+    """ "an" before a format name starting with a vowel ("an AVIF file"), else "a" ("a MOV file")."""
+    return "an" if format_name[:1] in "AEIOU" else "a"
 
 
 def _parse_ratio(name: str) -> float:
