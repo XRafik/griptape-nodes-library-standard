@@ -264,6 +264,10 @@ class TestLocalVideoInfo:
         self._answer(monkeypatch, {"width": 1920, "height": 1080})
         assert local_video_info(str(clip)) == ImageInfo(1920, 1080, None)
 
+    def test_treats_a_0x0_frame_size_as_unread(self, clip: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._answer(monkeypatch, {"width": 0, "height": 0})
+        assert local_video_info(str(clip)) is None
+
     @pytest.mark.parametrize(
         "stream",
         [
@@ -525,6 +529,40 @@ class TestVideoErrors:
         assert len(errors) == 1
         assert "megapixels" in str(errors[0])
 
+    @pytest.mark.parametrize(
+        ("average", "nominal", "min_fps", "max_fps", "expected"),
+        [
+            # A 60 fps screen recording averaging 19 fps: the minimum uses the higher, declared rate.
+            (19.1, 60.0, 24, 60, None),
+            # A clip declaring 120 fps but averaging 50: the maximum uses the lower, average rate.
+            (50.0, 120.0, 24, 60, None),
+            # Both rates under the minimum still fail, quoting the higher.
+            (15.0, 20.0, 24, None, "is 20 fps and the minimum is 24 fps."),
+        ],
+        ids=["vfr-under-min-average", "vfr-over-max-nominal", "both-under-min"],
+    )
+    def test_checks_each_frame_rate_bound_against_the_easier_rate(
+        self,
+        clip: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        average: float,
+        nominal: float,
+        min_fps: float | None,
+        max_fps: float | None,
+        expected: str | None,
+    ) -> None:
+        monkeypatch.setattr(
+            preflight,
+            "local_video_probe",
+            lambda _value: VideoProbe(info=None, seconds=5.0, fps=average, nominal_fps=nominal),
+        )
+        messages = [str(e) for e in video_errors(str(clip), subject=SUBJECT, min_fps=min_fps, max_fps=max_fps)]
+        if expected is None:
+            assert messages == []
+        else:
+            assert len(messages) == 1
+            assert expected in messages[0]
+
     def test_checks_the_frame_rate(self, clip: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(preflight, "local_video_probe", lambda _value: VideoProbe(info=None, seconds=5.0, fps=15.0))
         errors = video_errors(str(clip), subject=SUBJECT, min_fps=24, max_fps=60)
@@ -640,8 +678,9 @@ class TestCheckMimeType:
             ("image/heic", "is an HEIC file."),
             ("image/x-icon", "is an ICON file."),
             ("image/tiff", "is a TIFF file."),
+            ("image/vnd.adobe.photoshop", "is a PSD file."),
         ],
-        ids=["vowel-sound", "letter-h", "strips-x-prefix", "consonant"],
+        ids=["vowel-sound", "letter-h", "strips-x-prefix", "consonant", "known-name"],
     )
     def test_names_the_format_with_the_right_article(self, mime_type: str, expected: str) -> None:
         error = check_mime_type(mime_type, subject=SUBJECT, allowed=("image/jpeg", "image/png"))

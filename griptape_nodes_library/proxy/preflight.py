@@ -56,7 +56,7 @@ from PIL import Image, UnidentifiedImageError
 from static_ffmpeg import run as static_ffmpeg_run
 
 from griptape_nodes_library.media import MediaKind, coerce_media_url_or_data_uri
-from griptape_nodes_library.utils.ffmpeg_utils import _select_frame_rate
+from griptape_nodes_library.utils.ffmpeg_utils import _parse_fraction_string, _select_frame_rate
 
 logger = logging.getLogger("griptape_nodes")
 
@@ -168,6 +168,8 @@ class VideoProbe(NamedTuple):
     `seconds` is the video stream's duration, falling back to the container's. The container's
     duration covers every stream, so a longer audio track can make it longer than the video;
     `container_seconds` keeps it so a minimum can be checked against the longer of the two.
+    `fps` is the average frame rate and `nominal_fps` the stream's declared one; they differ only
+    for a variable-frame-rate clip, so each frame-rate bound is checked against the easier of them.
     Each part is None when ffprobe didn't report it.
     """
 
@@ -175,6 +177,7 @@ class VideoProbe(NamedTuple):
     seconds: float | None
     fps: float | None = None
     container_seconds: float | None = None
+    nominal_fps: float | None = None
 
 
 def local_video_probe(value: Any) -> VideoProbe | None:
@@ -195,6 +198,7 @@ def local_video_probe(value: Any) -> VideoProbe | None:
         seconds=stream_seconds if stream_seconds is not None else container_seconds,
         fps=_frame_rate(data),
         container_seconds=container_seconds,
+        nominal_fps=_nominal_frame_rate(data),
     )
 
 
@@ -228,6 +232,9 @@ def _frame_size(data: dict[str, Any]) -> ImageInfo | None:
         width, height = int(stream["width"]), int(stream["height"])
     except (KeyError, TypeError, ValueError):
         return None
+    # ffprobe reports 0x0 when it can't work out the frame size; that's unread, not tiny.
+    if width <= 0 or height <= 0:
+        return None
     rotation = stream.get("tags", {}).get("rotate")
     for side_data in stream.get("side_data_list", []):
         rotation = side_data.get("rotation", rotation)
@@ -237,6 +244,15 @@ def _frame_size(data: dict[str, Any]) -> ImageInfo | None:
     except (TypeError, ValueError):
         pass
     return ImageInfo(width=width, height=height, mime_type=None)
+
+
+def _nominal_frame_rate(data: dict[str, Any]) -> float | None:
+    """The first video stream's declared frame rate (`r_frame_rate`) in ffprobe's JSON, or None."""
+    streams = data.get("streams")
+    if not streams:
+        return None
+    fps = _parse_fraction_string(streams[0].get("r_frame_rate", ""))
+    return fps if fps > 0 else None
 
 
 def _frame_rate(data: dict[str, Any]) -> float | None:
@@ -628,12 +644,13 @@ def video_errors(  # noqa: PLR0913
         errors.append(
             check_aspect_ratio_range(info, subject=subject, widest=widest, tallest=tallest, docs_url=docs_url)
         )
-    if needs_fps:
-        errors.append(
-            check_frame_rate(
-                probe.fps if probe else None, subject=subject, minimum=min_fps, maximum=max_fps, docs_url=docs_url
-            )
-        )
+    # A variable-frame-rate clip's average and declared rates differ, and providers don't say which
+    # they mean, so each bound uses the rate it's easier to meet, as the duration checks do.
+    rates = [rate for rate in (probe.fps, probe.nominal_fps) if rate is not None] if probe else []
+    if max_fps is not None:
+        errors.append(check_frame_rate(min(rates, default=None), subject=subject, maximum=max_fps, docs_url=docs_url))
+    if min_fps is not None:
+        errors.append(check_frame_rate(max(rates, default=None), subject=subject, minimum=min_fps, docs_url=docs_url))
     return [error for error in errors if error]
 
 
@@ -716,9 +733,17 @@ def _format_past(value: float, limit: float, decimals: int) -> str:
     return repr(value)
 
 
+# Formats whose MIME subtype isn't the name an artist knows them by.
+_FORMAT_NAMES = {
+    "image/vnd.adobe.photoshop": "PSD",
+    "image/x-portable-anymap": "PPM",
+    "application/postscript": "EPS",
+}
+
+
 def _format_name(mime_type: str) -> str:
     """A MIME type's format as a message shows it: "image/x-icon" reads "ICON"."""
-    return mime_type.split("/", 1)[-1].removeprefix("x-").removeprefix("vnd.").upper()
+    return _FORMAT_NAMES.get(mime_type) or mime_type.split("/", 1)[-1].removeprefix("x-").removeprefix("vnd.").upper()
 
 
 # Letters whose spoken name starts with a vowel sound, so a format read letter by letter takes "an":
