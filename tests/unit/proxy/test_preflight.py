@@ -19,6 +19,7 @@ from PIL import Image
 from griptape_nodes_library.proxy import preflight
 from griptape_nodes_library.proxy.preflight import (
     ImageInfo,
+    VideoProbe,
     check_aspect_ratio,
     check_aspect_ratio_range,
     check_count,
@@ -31,6 +32,7 @@ from griptape_nodes_library.proxy.preflight import (
     local_size_bytes,
     local_video_duration,
     local_video_info,
+    local_video_probe,
 )
 
 SUBJECT = "Image 2 in 'reference images'"
@@ -172,6 +174,45 @@ class TestLocalVideoDuration:
     def test_does_not_probe_a_remote_or_inline_video(self, value: str, ffprobe_runs: list[dict[str, Any]]) -> None:
         assert local_video_duration(value) is None
         assert ffprobe_runs == []
+
+
+class TestLocalVideoProbe:
+    @pytest.fixture
+    def clip(self, tmp_path: Path) -> Path:
+        path = tmp_path / "clip.mp4"
+        path.write_bytes(b"video")
+        return path
+
+    def _answer(self, monkeypatch: pytest.MonkeyPatch, output: dict[str, Any]) -> list[list[str]]:
+        runs: list[list[str]] = []
+
+        def fake_run(cmd: list[str], **_kwargs: Any) -> SimpleNamespace:
+            runs.append(cmd)
+            return SimpleNamespace(stdout=json.dumps(output))
+
+        monkeypatch.setattr(preflight, "_installed_ffprobe", lambda: "/usr/bin/ffprobe")
+        monkeypatch.setattr(preflight.subprocess, "run", fake_run)
+        return runs
+
+    def test_reads_size_and_duration_in_one_ffprobe_run(self, clip: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        runs = self._answer(monkeypatch, {"format": {"duration": "9.5"}, "streams": [{"width": 1920, "height": 1080}]})
+        assert local_video_probe(str(clip)) == VideoProbe(info=ImageInfo(1920, 1080, None), seconds=9.5)
+        assert len(runs) == 1
+        assert "-show_format" in runs[0]
+        assert "-show_streams" in runs[0]
+
+    def test_reports_the_part_ffprobe_gave_when_the_other_is_missing(
+        self, clip: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._answer(monkeypatch, {"format": {"duration": "4.0"}, "streams": []})
+        assert local_video_probe(str(clip)) == VideoProbe(info=None, seconds=4.0)
+
+    def test_skips_when_ffprobe_is_not_installed(self, clip: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(preflight, "_installed_ffprobe", lambda: None)
+        assert local_video_probe(str(clip)) is None
+
+    def test_skips_a_remote_video(self) -> None:
+        assert local_video_probe("https://example.com/clip.mp4") is None
 
 
 class TestLocalVideoInfo:

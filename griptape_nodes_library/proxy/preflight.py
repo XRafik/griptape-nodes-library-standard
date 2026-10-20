@@ -5,7 +5,8 @@ sometimes credits. These helpers let a node refuse it first, from what it can re
 
 There are two halves:
 
-- **Readers** (`local_size_bytes`, `local_image_info`, `local_video_info`, `local_video_duration`) read one property of
+- **Readers** (`local_size_bytes`, `local_image_info`, `local_video_probe`, `local_video_info`,
+  `local_video_duration`) read one property of
   a media input from data already on this machine. None of them makes a network call or downloads a
   tool: the video reader uses ffprobe only if it is already installed. They return None when the
   value is a remote URL, can't be found, or can't be parsed, or when the tool to read it is missing
@@ -55,6 +56,7 @@ logger = logging.getLogger("griptape_nodes")
 
 __all__ = [
     "ImageInfo",
+    "VideoProbe",
     "check_aspect_ratio",
     "check_aspect_ratio_range",
     "check_count",
@@ -67,6 +69,7 @@ __all__ = [
     "local_size_bytes",
     "local_video_duration",
     "local_video_info",
+    "local_video_probe",
 ]
 
 BYTES_PER_MB = 1024 * 1024
@@ -150,15 +153,53 @@ def local_image_info(value: Any) -> ImageInfo | None:
         return None
 
 
+class VideoProbe(NamedTuple):
+    """A video's displayed frame size and duration, read with one ffprobe run.
+
+    Either part is None when ffprobe didn't report it.
+    """
+
+    info: ImageInfo | None
+    seconds: float | None
+
+
+def local_video_probe(value: Any) -> VideoProbe | None:
+    """The frame size and duration of a video input, or None if it can't be read locally.
+
+    One ffprobe run reads both, so a node checking size and duration on the same clip waits on at
+    most one `FFPROBE_TIMEOUT_SECONDS`, and the two values come from the same read of the file.
+    Probes only a file on this machine, with an ffprobe that is already installed; see
+    `_probe_local_video`.
+    """
+    data = _probe_local_video(value, ["-show_format", "-select_streams", "v:0", "-show_streams"])
+    if data is None:
+        return None
+    return VideoProbe(info=_frame_size(data), seconds=_duration(data))
+
+
 def local_video_info(value: Any) -> ImageInfo | None:
     """The frame size of a video input, as an `ImageInfo` with no MIME type, or None if it can't be
     read locally.
 
-    Probes the same way as `local_video_duration`. Reports the size as displayed, so a phone clip
-    stored landscape with a 90-degree rotation reads as portrait.
+    Reports the size as displayed, so a phone clip stored landscape with a 90-degree rotation reads
+    as portrait. A node that also needs the duration should call `local_video_probe` once instead.
     """
-    data = _probe_local_video(value, ["-select_streams", "v:0", "-show_streams"])
-    streams = data.get("streams") if data else None
+    probe = local_video_probe(value)
+    return probe.info if probe else None
+
+
+def local_video_duration(value: Any) -> float | None:
+    """The duration in seconds of a video input, or None if it can't be read locally.
+
+    A node that also needs the frame size should call `local_video_probe` once instead.
+    """
+    probe = local_video_probe(value)
+    return probe.seconds if probe else None
+
+
+def _frame_size(data: dict[str, Any]) -> ImageInfo | None:
+    """The displayed frame size in ffprobe's JSON for the first video stream, or None."""
+    streams = data.get("streams")
     if not streams:
         return None
     stream = streams[0]
@@ -177,14 +218,9 @@ def local_video_info(value: Any) -> ImageInfo | None:
     return ImageInfo(width=width, height=height, mime_type=None)
 
 
-def local_video_duration(value: Any) -> float | None:
-    """The duration in seconds of a video input, or None if it can't be read locally.
-
-    Probes with ffprobe only a file on this machine, and only with an ffprobe that is already
-    installed; see `_probe_local_video`.
-    """
-    data = _probe_local_video(value, ["-show_format"])
-    duration = data.get("format", {}).get("duration") if data else None
+def _duration(data: dict[str, Any]) -> float | None:
+    """The container duration in ffprobe's JSON, in seconds, or None."""
+    duration = data.get("format", {}).get("duration")
     try:
         return float(duration) if duration is not None else None
     except (TypeError, ValueError):
