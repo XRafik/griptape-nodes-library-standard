@@ -19,12 +19,12 @@ from griptape_nodes.exe_types.param_types.parameter_float import ParameterFloat
 from griptape_nodes.exe_types.param_types.parameter_int import ParameterInt
 from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
 from griptape_nodes.exe_types.param_types.parameter_video import ParameterVideo
-from griptape_nodes.files.file import File, FileLoadError
+from griptape_nodes.files.file import FileLoadError
 from griptape_nodes.traits.options import Options
 from griptape_nodes.traits.slider import Slider
 
-from griptape_nodes_library.media import coerce_media_url_or_data_uri
-from griptape_nodes_library.proxy import GriptapeProxyNode
+from griptape_nodes_library.media import coerce_media_url_or_data_uri, resolve_media_location
+from griptape_nodes_library.proxy import ArtifactKind, GriptapeProxyNode
 from griptape_nodes_library.utils.ffmpeg_utils import VideoMetadata, extract_video_metadata_structured
 
 logger = logging.getLogger("griptape_nodes")
@@ -324,7 +324,7 @@ class TopazVideoUpscale(GriptapeProxyNode):
             # Only once polling has finished: Topaz fetches the source from this
             # URL when the job starts, so deleting it any earlier would pull the
             # video out from under a queued job.
-            self._public_video_url_parameter.delete_uploaded_artifact()
+            await self._public_video_url_parameter.adelete_uploaded_artifact()
 
     # -- model routing -----------------------------------------------------
 
@@ -343,7 +343,7 @@ class TopazVideoUpscale(GriptapeProxyNode):
         model_name = self.get_parameter_value("model") or DEFAULT_MODEL
         family = MODEL_FAMILIES.get(model_name)
         if family is None:
-            msg = f"{self.name}: no model family is registered for {model_name!r}."
+            msg = f"No model family is registered for {model_name!r}."
             raise ValueError(msg)
         return family
 
@@ -483,13 +483,13 @@ class TopazVideoUpscale(GriptapeProxyNode):
         """
         video_url = coerce_media_url_or_data_uri(video_input, kind="video")
         if not video_url:
-            msg = f"{self.name} could not resolve the input video."
+            msg = "Could not read the video connected to 'input video'."
             raise ValueError(msg)
 
         try:
-            resolved_path = File(video_url).resolve()
+            resolved_path = resolve_media_location(video_url)
         except FileLoadError as e:
-            msg = f"{self.name} could not resolve video path {video_url!r}: {e}"
+            msg = f"Could not resolve the video path {video_url!r}: {e}"
             raise ValueError(msg) from e
 
         return extract_video_metadata_structured(str(resolved_path))
@@ -521,7 +521,9 @@ class TopazVideoUpscale(GriptapeProxyNode):
             return container
 
         if token:
-            msg = f"{self.name}: Topaz only accepts mp4, mov, or mkv source video, but got {token!r}."
+            msg = (
+                f"Topaz only accepts mp4, mov, or mkv source video, but got {token!r}. Convert the video and try again."
+            )
             raise ValueError(msg)
 
         logger.warning(
@@ -562,14 +564,14 @@ class TopazVideoUpscale(GriptapeProxyNode):
             case ResizeMode.WIDTH:
                 target = self.get_parameter_value("target_size") or 0
                 if target <= 0:
-                    msg = f"{self.name} needs a positive target size when resize_mode is width (got {target})."
+                    msg = f"'target_size' must be positive when resize_mode is width (got {target})."
                     raise ValueError(msg)
                 height = round(source_height * (target / source_width))
                 width, height = self._to_even(int(target)), self._to_even(height)
             case ResizeMode.HEIGHT:
                 target = self.get_parameter_value("target_size") or 0
                 if target <= 0:
-                    msg = f"{self.name} needs a positive target size when resize_mode is height (got {target})."
+                    msg = f"'target_size' must be positive when resize_mode is height (got {target})."
                     raise ValueError(msg)
                 width = round(source_width * (target / source_height))
                 width, height = self._to_even(width), self._to_even(int(target))
@@ -578,7 +580,7 @@ class TopazVideoUpscale(GriptapeProxyNode):
                 target_height = self.get_parameter_value("target_height") or 0
                 if target_width <= 0 or target_height <= 0:
                     msg = (
-                        f"{self.name} needs a positive target width and height when resize_mode is "
+                        f"'target_width' and 'target_height' must both be positive when resize_mode is "
                         f"'width and height' (got {target_width}x{target_height})."
                     )
                     raise ValueError(msg)
@@ -586,7 +588,7 @@ class TopazVideoUpscale(GriptapeProxyNode):
             case ResizeMode.PERCENTAGE:
                 pct = self.get_parameter_value("percentage") or 0
                 if pct <= 0:
-                    msg = f"{self.name} needs a positive percentage (got {pct})."
+                    msg = f"'percentage' must be positive (got {pct})."
                     raise ValueError(msg)
                 width = self._to_even(int(source_width * pct / 100))
                 height = self._to_even(int(source_height * pct / 100))
@@ -599,8 +601,8 @@ class TopazVideoUpscale(GriptapeProxyNode):
         max_pixels = MAX_OUTPUT_PIXELS[self._family()]
         if max_pixels is not None and width * height > max_pixels:
             msg = (
-                f"{self.name}: computed output {width}x{height} exceeds Topaz's "
-                f"{max_pixels:,}-pixel (3840x2160) hard limit."
+                f"The output size {width}x{height} is over Topaz's "
+                f"{max_pixels:,}-pixel (3840x2160) hard limit. Choose a smaller size."
             )
             raise ValueError(msg)
 
@@ -611,7 +613,7 @@ class TopazVideoUpscale(GriptapeProxyNode):
     async def _build_payload(self) -> dict[str, Any]:
         video = self.get_parameter_value("video")
         if not video:
-            msg = f"{self.name} requires an input video to upscale."
+            msg = "Connect a video to 'input video' to upscale."
             raise ValueError(msg)
 
         container = self._derive_container(video)
@@ -626,7 +628,7 @@ class TopazVideoUpscale(GriptapeProxyNode):
         frame_count = self._frame_count(metadata)
         if frame_count <= 0:
             msg = (
-                f"{self.name} could not determine the frame count of the input video. "
+                "The node could not determine the frame count of the input video. "
                 "Topaz requires it, and neither nb_frames nor duration x frame rate was "
                 "available from the file."
             )
@@ -635,7 +637,7 @@ class TopazVideoUpscale(GriptapeProxyNode):
         max_frames = self._max_frames()
         if frame_count > max_frames:
             msg = (
-                f"{self.name}: the input video has {frame_count} frames, over {self._family()}'s "
+                f"The input video has {frame_count} frames, over {self._family()}'s "
                 f"{max_frames}-frame limit{self._frame_cap_hint()}. Trim or split the video first."
             )
             raise ValueError(msg)
@@ -644,9 +646,9 @@ class TopazVideoUpscale(GriptapeProxyNode):
 
         # Upload after probing: the probe needs the original local path, and there
         # is no point paying for an upload if the file turns out to be unusable.
-        video_url = self._public_video_url_parameter.get_public_url_for_parameter()
+        video_url = await self._public_video_url_parameter.aget_public_url_for_parameter()
         if not video_url:
-            msg = f"{self.name} could not produce a public URL for the input video."
+            msg = "The node could not produce a public URL for the input video."
             raise ValueError(msg)
 
         source: dict[str, Any] = {
@@ -738,47 +740,14 @@ class TopazVideoUpscale(GriptapeProxyNode):
 
     # -- result ------------------------------------------------------------
 
-    async def _parse_result(self, result_json: dict[str, Any], _generation_id: str) -> None:
-        raw_bytes = result_json.get("raw_bytes")
-        if isinstance(raw_bytes, (bytes, bytearray)):
-            await self._handle_binary_video_response(bytes(raw_bytes))
-            return
-
-        # `download.url` is Topaz's documented shape for a completed generation.
-        await self._download_and_save(
-            result_json["download"]["url"],
+    async def _parse_result(self, _result_json: dict[str, Any], generation_id: str) -> None:
+        """Save the hosted upscaled video."""
+        await self._save_generated_media(
+            generation_id,
             "video_output",
             lambda v, n: VideoUrlArtifact(value=v, name=n),
-            media_kind="video",
+            kind=ArtifactKind.VIDEO,
             action="upscaled",
-        )
-
-    async def _handle_binary_video_response(self, video_bytes: bytes) -> None:
-        """Save video bytes served directly by the proxy rather than via a URL."""
-        if not video_bytes:
-            self._set_safe_defaults()
-            self._set_status_results(
-                was_successful=False,
-                result_details=f"{self.name}: the upscale completed but no video data was received.",
-            )
-            return
-
-        try:
-            dest = self._output_file.build_file()
-            saved = await dest.awrite_bytes(video_bytes)
-        except (OSError, PermissionError) as e:
-            logger.error("%s failed to save the upscaled video: %s", self.name, e)
-            self._set_safe_defaults()
-            self._set_status_results(
-                was_successful=False,
-                result_details=f"{self.name}: the upscale succeeded but saving the video failed: {e}",
-            )
-            return
-
-        self.parameter_output_values["video_output"] = VideoUrlArtifact(value=saved.location, name=saved.name)
-        self._set_status_results(
-            was_successful=True,
-            result_details=f"Upscale successful. Video saved as {saved.name}.",
         )
 
     def _handle_payload_build_error(self, e: Exception) -> None:

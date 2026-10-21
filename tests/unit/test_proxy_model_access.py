@@ -5,7 +5,7 @@ Every proxy node under ``griptape_nodes_library`` that offers a choice of
 models constructs a ``ModelAccessComponent`` over its ``model``/``model_id``
 parameter and stores it on ``self._model_access``: the component owns the
 ``Options`` + refresh ``Button`` traits, decorates each row with the caller's
-license entitlement, and gates ``_submit_and_poll`` against the current policy.
+license entitlement, and gates ``_begin_generation`` against the current policy.
 These tests cover that wiring and the runtime gate across every node that
 installs it; the component's own behavior is covered in the engine test suite.
 """
@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
+from griptape_nodes.exe_types.core_types import NodeError
 from griptape_nodes.exe_types.param_components.model_access_component import ModelAccessComponent
 from griptape_nodes.node_library.library_registry import LibraryRegistry
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
@@ -56,6 +57,9 @@ type AuthorizationHook = Callable[[AuthorizationCheckpoint], CheckpointDenial | 
 # it has no case here.
 NODE_MODEL_CASES: list[tuple[str, str, str, str]] = [
     ("TranscribeAudio", "gtc_whisper_1", "whisper-1", "model"),  # only declared model
+    ("JevAskYesNo", "gtc_jev_preview", "jev-preview", "model"),
+    ("JevPickOne", "gtc_jev_preview", "jev-preview", "model"),
+    ("JevRate", "gtc_jev_preview", "jev-preview", "model"),
     ("ElevenLabsTextToSpeechGeneration", "gtc_eleven_multilingual_v2", "eleven_multilingual_v2", "model"),
     (
         "OmnihumanSubjectRecognition",
@@ -76,8 +80,8 @@ NODE_MODEL_CASES: list[tuple[str, str, str, str]] = [
     ("WanAnimateGeneration", "gtc_wan_2_2_animate_move", "wan2.2-animate-move", "model"),
     ("WanReferenceToVideoGeneration", "gtc_wan_2_6_r2v", "wan2.6-r2v", "model"),  # only declared model
     ("FluxImageGeneration", "gtc_flux_kontext_pro", "flux-kontext-pro", "model"),  # only declared model
-    ("QwenImageGeneration", "gtc_qwen_image_plus", "qwen-image-plus", "model"),
-    ("QwenImageEdit", "gtc_qwen_image_edit", "qwen-image-edit", "model"),
+    ("QwenImageGeneration", "gtc_qwen_image_3_0", "qwen-image-3.0", "model"),  # only declared model
+    ("QwenImageEdit", "gtc_qwen_image_3_0", "qwen-image-3.0", "model"),  # only declared model
     ("SeedreamImageGeneration", "gtc_seedream_4_0", "seedream-4-0-250828", "model"),
     ("GrokImageGeneration", "gtc_grok_imagine_image", "grok-imagine-image", "model"),  # only declared model
     ("GrokImageEdit", "gtc_grok_imagine_image", "grok-imagine-image", "model"),  # only declared model
@@ -193,14 +197,14 @@ def test_denied_model_row_carries_denial_icon(
 
 
 @pytest.mark.asyncio
-async def test_submit_and_poll_gates_on_denial(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`_submit_and_poll` re-checks the selection against the current policy.
+async def test_begin_generation_gates_on_denial(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`_begin_generation` re-checks the selection against the current policy.
 
     Construct the node BEFORE registering the deny hook, so the component's
     constructor-time snapshot is clean and doesn't relocate the stored value
     off the about-to-be-denied selection. Only one representative node
     (SoraVideoGeneration) is exercised here: the gate itself lives in
-    `GriptapeProxyNode._submit_and_poll`, shared by every adopting node, so this
+    `GriptapeProxyNode._begin_generation`, shared by every adopting node, so this
     isn't re-checked per node.
 
     The gate must also run ahead of `_build_payload`. On the nodes that hand the
@@ -221,8 +225,6 @@ async def test_submit_and_poll_gates_on_denial(monkeypatch: pytest.MonkeyPatch) 
 
     async def fake_submit_generation(payload: dict[str, Any], headers: dict[str, str], api_model_id: str) -> None:
         submit_calls.append({"payload": payload, "headers": headers, "api_model_id": api_model_id})
-        # None short-circuits `_submit_and_poll` before it reaches the poll loop,
-        # which this test has no interest in exercising.
         return None
 
     monkeypatch.setattr(node, "_build_payload", fake_build_payload)
@@ -231,19 +233,22 @@ async def test_submit_and_poll_gates_on_denial(monkeypatch: pytest.MonkeyPatch) 
     hook = _deny_hook(CheckpointAction.OFFER_MODEL, "gtc_sora_2_pro")
     GriptapeNodes.EventManager().add_authorization_hook(hook)
     try:
-        result = await node._submit_and_poll({})
+        # Nothing is wired to the failure output, so the denial is raised.
+        with pytest.raises(NodeError, match="denied for test"):
+            await node._begin_generation({})
     finally:
         GriptapeNodes.EventManager().remove_authorization_hook(hook)
 
-    assert result is None
     assert node.parameter_output_values.get("was_successful") is False
     assert "denied for test" in node.parameter_output_values.get("result_details", "")
     assert submit_calls == []
     assert build_calls == []
 
     # Mirror case: with the hook removed, the same selection is permitted again
-    # and the flow reaches `_build_payload` and then `_submit_generation`.
-    await node._submit_and_poll({})
+    # and the flow reaches `_build_payload` and then `_submit_generation`. The fake submit
+    # returns no generation id, which is itself a failure.
+    with pytest.raises(NodeError, match="did not return a generation ID"):
+        await node._begin_generation({})
 
     assert len(build_calls) == 1
     assert len(submit_calls) == 1
@@ -300,7 +305,7 @@ def test_validation_reports_denial_alongside_input_checks(
     param_name: str,
     authorization_hook: Callable[[AuthorizationHook], None],
 ) -> None:
-    """A denied model surfaces during validation, not only from `_submit_and_poll`.
+    """A denied model surfaces during validation, not only from `_begin_generation`.
 
     Nodes whose own input checks live in `validate_before_node_run` would otherwise
     report nothing but "requires a prompt" to an artist whose real blocker is the

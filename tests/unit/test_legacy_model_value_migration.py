@@ -24,7 +24,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
-import requests
 from griptape_nodes.exe_types.param_components.model_access_component import ModelAccessComponent
 from griptape_nodes.node_library.library_registry import LibraryRegistry
 
@@ -71,6 +70,7 @@ NODE_TYPES_WITH_MODEL_ACCESS: list[str] = [
     "LTXVideoExtend",
     "LTXVideoRetake",
     "LTXVideoToVideoHDR",
+    "MCPTaskNode",
     "MinimaxHailuoVideoGeneration",
     "NimPrompt",
     "OmnihumanSubjectDetection",
@@ -154,6 +154,47 @@ EXPLICIT_LEGACY_VALUES: dict[str, dict[str, str]] = {
     "GoogleImageGeneration": {
         "nano-banana-3-pro": "gemini-3-pro-image",
     },
+    "KlingTextToVideoGeneration": {
+        "Kling v1.6": "kling-v2-6",
+        "Kling v2 Master": "kling-v2-6",
+        "Kling v2.1 Master": "kling-v2-6",
+        "gtc_kling_v1_6": "kling-v2-6",
+        "gtc_kling_v2_master": "kling-v2-6",
+        "gtc_kling_v2_1_master": "kling-v2-6",
+        "kling-v1-6": "kling-v2-6",
+        "kling-v2-master": "kling-v2-6",
+        "kling-v2-1-master": "kling-v2-6",
+    },
+    "KlingImageToVideoGeneration": {
+        "Kling v1.6": "kling-v2-6",
+        "Kling v2 Master": "kling-v2-6",
+        "Kling v2.1 Master": "kling-v2-6",
+        "gtc_kling_v1_6": "kling-v2-6",
+        "gtc_kling_v2_master": "kling-v2-6",
+        "gtc_kling_v2_1_master": "kling-v2-6",
+        "kling-v1-6": "kling-v2-6",
+        "kling-v2-master": "kling-v2-6",
+        "kling-v2-1-master": "kling-v2-6",
+    },
+    "QwenImageGeneration": {
+        "Qwen Image": "qwen-image-3.0",
+        "Qwen Image Plus": "qwen-image-3.0",
+        "gtc_qwen_image": "qwen-image-3.0",
+        "gtc_qwen_image_plus": "qwen-image-3.0",
+        "qwen-image": "qwen-image-3.0",
+        "qwen-image-plus": "qwen-image-3.0",
+    },
+    "QwenImageEdit": {
+        "Qwen Image Edit": "qwen-image-3.0",
+        "Qwen Image Edit Plus": "qwen-image-3.0",
+        "Qwen Image Edit Plus (2025-10-30)": "qwen-image-3.0",
+        "gtc_qwen_image_edit": "qwen-image-3.0",
+        "gtc_qwen_image_edit_plus": "qwen-image-3.0",
+        "gtc_qwen_image_edit_plus_2025_10_30": "qwen-image-3.0",
+        "qwen-image-edit": "qwen-image-3.0",
+        "qwen-image-edit-plus": "qwen-image-3.0",
+        "qwen-image-edit-plus-2025-10-30": "qwen-image-3.0",
+    },
 }
 
 
@@ -167,27 +208,6 @@ def _create_node(node_type: str) -> BaseNode:
     """
     library = LibraryRegistry.get_library(name=LIBRARY_NAME)
     return library.create_node(node_type=node_type, name=node_type)
-
-
-class _FakeCloudModelsResponse:
-    """Stand-in for the `requests.Response` `GriptapeCloudPrompt._list_models` reads."""
-
-    def raise_for_status(self) -> None:
-        return
-
-    def json(self) -> dict[str, list[dict[str, Any]]]:
-        return {"models": [{"model_name": "gpt-4.1-mini", "default": True}]}
-
-
-@pytest.fixture(autouse=True)
-def _stub_griptape_cloud_model_list(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`GriptapeCloudPrompt.__init__` calls `_list_models`, which hits Griptape Cloud's
-    API over HTTP; stub `requests.get` so constructing the node never depends on network
-    access. The library loader reimports each node's module from its file path, so
-    patching the `GriptapeCloudPrompt` class imported here would miss the module
-    instance the library actually registers; `requests.get` is shared regardless.
-    """
-    monkeypatch.setattr(requests, "get", lambda *args, **kwargs: _FakeCloudModelsResponse())  # noqa: ARG005
 
 
 def _model_access_component(node: BaseNode) -> ModelAccessComponent:

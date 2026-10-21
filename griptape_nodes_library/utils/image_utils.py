@@ -118,6 +118,61 @@ def parse_hex_color(color: str) -> tuple[int, int, int]:
     return (int(color[0:2], 16), int(color[2:4], 16), int(color[4:6], 16))
 
 
+def scale_alpha(image: Image.Image, opacity: float) -> Image.Image:
+    """Scale an image's alpha channel by `opacity`, adding one if it has none."""
+    rgba = image.convert("RGBA") if image.mode != "RGBA" else image.copy()
+    if opacity >= 1.0:
+        return rgba
+    rgba.putalpha(rgba.getchannel("A").point([int(a * opacity + 0.5) for a in range(256)]))
+    return rgba
+
+
+def composite_over(base: Image.Image, overlay: Image.Image, position: tuple[int, int]) -> Image.Image:
+    """Composite `overlay` over `base` at `position` using Porter-Duff "over".
+
+    `Image.paste` with a mask blends toward the overlay's colour while also writing the
+    overlay's alpha into the base, which both mis-weights semi-transparent pixels and
+    punches holes in an opaque base. Compositing through a full-size transparent canvas
+    keeps the operation associative, so stacking many layers stays correct.
+    """
+    canvas = Image.new("RGBA", base.size, (0, 0, 0, 0))
+    canvas.paste(overlay, position)
+    return Image.alpha_composite(base if base.mode == "RGBA" else base.convert("RGBA"), canvas)
+
+
+def premultiply_rgba(image: Image.Image, *, invert: bool = False) -> Image.Image:
+    """Multiply an RGBA image's RGB channels by its alpha (straight → premultiplied).
+
+    With invert=True the factor is (1 - alpha) instead, which premultiplies by the
+    complement — useful for edge matting where opaque areas should be darkened rather
+    than transparent ones.  The alpha channel is left unchanged in both cases.
+    """
+    rgba = image if image.mode == "RGBA" else image.convert("RGBA")
+    arr = np.asarray(rgba, dtype=np.float32)
+    alpha = arr[..., 3:4] / 255.0
+    factor = (1.0 - alpha) if invert else alpha
+    rgb = np.clip(np.round(arr[..., :3] * factor), 0.0, 255.0)
+    result = np.concatenate([rgb, arr[..., 3:4]], axis=-1)
+    return Image.fromarray(result.astype(np.uint8), mode="RGBA")
+
+
+def unpremultiply_rgba(image: Image.Image, *, invert: bool = False) -> Image.Image:
+    """Divide an RGBA image's RGB channels by its alpha (premultiplied → straight).
+
+    With invert=True the divisor is (1 - alpha) instead.  Pixels where the divisor is
+    zero are left black.  The alpha channel is left unchanged in both cases.
+    """
+    rgba = image if image.mode == "RGBA" else image.convert("RGBA")
+    arr = np.asarray(rgba, dtype=np.float32)
+    alpha = arr[..., 3:4] / 255.0
+    factor = (1.0 - alpha) if invert else alpha
+    safe = np.where(factor > 0, factor, 1.0)
+    rgb = np.where(factor > 0, arr[..., :3] / safe, 0.0)
+    rgb = np.clip(np.round(rgb), 0.0, 255.0)
+    result = np.concatenate([rgb, arr[..., 3:4]], axis=-1)
+    return Image.fromarray(result.astype(np.uint8), mode="RGBA")
+
+
 def create_background_image(width: int, height: int, background_color: str, *, transparent_bg: bool) -> Image.Image:
     """Create background image with specified color and transparency."""
     if transparent_bg:
@@ -241,21 +296,18 @@ def load_pil_from_url(url: str) -> Image.Image:
     url_lower = url.lower()
     if url_lower.endswith(".svg"):
         msg = f"SVG files are not supported by PIL. Cannot load vector graphics: {url}"
-        logger.error(msg)
         raise ValueError(msg)
 
     try:
         image_bytes = File(url).read_bytes()
     except FileLoadError as e:
         msg = f"Failed to load image from: {url}\nError: {e}"
-        logger.error(msg)
         raise ValueError(msg) from e
 
     # Check if content is SVG by looking at first few bytes
     content_start = image_bytes[:100].decode("utf-8", errors="ignore").lower()
     if "<svg" in content_start:
         msg = f"SVG files are not supported by PIL. Cannot load vector graphics: {url}"
-        logger.error(msg)
         raise ValueError(msg)
 
     try:
@@ -265,10 +317,8 @@ def load_pil_from_url(url: str) -> Image.Image:
             content_start = image_bytes[:100].decode("utf-8", errors="ignore").lower()
             if "<svg" in content_start:
                 msg = f"SVG files are not supported by PIL. Cannot load vector graphics: {url}"
-                logger.error(msg)
                 raise ValueError(msg) from e
         msg = f"Failed to load image from: {url}\nError: {e}"
-        logger.error(msg)
         raise ValueError(msg) from e
 
 
@@ -277,7 +327,7 @@ def load_pil_image_from_artifact(image: ImageUrlArtifact | ImageArtifact | str, 
 
     Args:
         image: ImageUrlArtifact, ImageArtifact, or str URL
-        context_name: Name for error messages (e.g., node name)
+        context_name: Name for log lines (e.g., node name)
 
     Returns:
         PIL Image object
@@ -287,8 +337,7 @@ def load_pil_image_from_artifact(image: ImageUrlArtifact | ImageArtifact | str, 
         ValueError: If image loading fails
     """
     if not isinstance(image, ImageUrlArtifact | ImageArtifact | str):
-        error_msg = f"{context_name}: Unsupported image type: {type(image).__name__}"
-        logger.warning(error_msg)
+        error_msg = f"Unsupported image type: {type(image).__name__}"
         raise TypeError(error_msg)
 
     try:
@@ -297,9 +346,11 @@ def load_pil_image_from_artifact(image: ImageUrlArtifact | ImageArtifact | str, 
         if isinstance(image, ImageArtifact):
             return Image.open(BytesIO(image.value))
         return load_pil_from_url(image)
+    except ValueError:
+        # load_pil_from_url already says which image failed and why.
+        raise
     except Exception as e:
-        error_msg = f"{context_name}: Failed to load image: {e}"
-        logger.warning(error_msg)
+        error_msg = f"Failed to load image: {e}"
         raise ValueError(error_msg) from e
 
 

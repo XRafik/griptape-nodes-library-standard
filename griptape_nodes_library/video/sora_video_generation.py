@@ -3,15 +3,24 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
+import json as _json
 import logging
 from contextlib import suppress
+from datetime import date
 from typing import TYPE_CHECKING, Any
 
 from griptape.artifacts import ImageArtifact, ImageUrlArtifact
 from griptape.artifacts.video_url_artifact import VideoUrlArtifact
-from griptape_nodes.exe_types.core_types import Parameter, ParameterGroup, ParameterMode
+from griptape_nodes.exe_types.core_types import (
+    NodeMessageResult,
+    Parameter,
+    ParameterGroup,
+    ParameterMessage,
+    ParameterMode,
+)
 from griptape_nodes.exe_types.param_components.model_access_component import ModelAccessComponent
 from griptape_nodes.exe_types.param_components.project_file_parameter import ProjectFileParameter
+from griptape_nodes.exe_types.param_types.parameter_button import ParameterButton
 from griptape_nodes.exe_types.param_types.parameter_dict import ParameterDict
 from griptape_nodes.exe_types.param_types.parameter_image import ParameterImage
 from griptape_nodes.exe_types.param_types.parameter_int import ParameterInt
@@ -19,15 +28,36 @@ from griptape_nodes.exe_types.param_types.parameter_string import ParameterStrin
 from griptape_nodes.exe_types.param_types.parameter_video import ParameterVideo
 from griptape_nodes.traits.options import Options
 
-from griptape_nodes_library.proxy import GriptapeProxyNode
+from griptape_nodes_library.proxy import ArtifactKind, GriptapeProxyNode
 from griptape_nodes_library.utils.image_utils import dict_to_image_url_artifact, load_pil_from_url
+from griptape_nodes_library.video._sora_migration import (
+    SEEDANCE_TARGET,
+    VEO_TARGET,
+    MigrationTarget,
+    migrate_sora_node,
+)
 
 if TYPE_CHECKING:
+    from griptape_nodes.traits.button import Button, ButtonDetailsMessagePayload
     from PIL import Image
 
 logger = logging.getLogger("griptape_nodes")
 
 __all__ = ["SoraVideoGeneration"]
+
+# OpenAI announced this on 2026-03-24 and carries it out on 2026-09-24, retiring the Videos
+# API alongside sora-2, sora-2-pro, and their dated snapshots without naming a successor.
+# https://developers.openai.com/api/docs/deprecations#2026-03-24-sora-2-video-generation-models-and-videos-api
+SORA_RETIREMENT_DATE = date(2026, 9, 24)
+# Spelled-out month, so no reader has to guess whether 09-24 is day-month or month-day.
+SORA_RETIREMENT_DATE_TEXT = SORA_RETIREMENT_DATE.strftime("%d %B %Y")
+
+RETIREMENT_MESSAGE = (
+    f"OpenAI is deprecating Sora on {SORA_RETIREMENT_DATE_TEXT} and has named no "
+    "successor, so this node cannot generate video after that date.\n\n"
+    "Use one of the buttons below to migrate to a still-supported video generation node. "
+    "Your prompt, start frame, connections, and canvas position carry over, and this node is removed."
+)
 
 # Size options for different models, keyed by the provider's own model id
 SIZE_OPTIONS = {
@@ -45,7 +75,17 @@ LEGACY_MODEL_VALUES: dict[str, str] = {
 
 
 class SoraVideoGeneration(GriptapeProxyNode):
-    """Generate a video using Sora 2 models via Griptape Cloud model proxy.
+    """Deprecated placeholder for Sora 2 video generation.
+
+    OpenAI is removing the Videos API and every Sora 2 model on 2026-09-24, after which no
+    configuration of this node can succeed. It keeps its full parameter surface anyway: saved
+    workflows set these parameters by name on load, so dropping them would break loading for the
+    whole workflow rather than just this node.
+
+    Submission is left to fail against the provider rather than being refused here, so what the
+    artist sees is the real response. The deprecation message and the two migrate buttons are the
+    part that has to be explained up front; the buttons rebuild the node as a video node that
+    still works, carrying over values and connections. See `_sora_migration` for the mappings.
 
     Inputs:
         - prompt (str): Text prompt for the video (required)
@@ -72,7 +112,42 @@ class SoraVideoGeneration(GriptapeProxyNode):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.category = "API Nodes"
-        self.description = "Generate video via Sora 2 through Griptape Cloud model proxy"
+        self.description = (
+            f"Deprecated: OpenAI removes Sora 2 on {SORA_RETIREMENT_DATE_TEXT}. Migrate to another video node."
+        )
+
+        # Added first so the deprecation and its remedy are the first things on the node,
+        # ahead of the settings that will stop working.
+        self.add_node_element(
+            ParameterMessage(
+                name="retirement_message",
+                title=f"Sora 2 is deprecated and stops working on {SORA_RETIREMENT_DATE_TEXT}",
+                value=RETIREMENT_MESSAGE,
+                variant="error",
+            )
+        )
+        self.add_parameter(
+            ParameterButton(
+                name="migrate_to_veo",
+                label=f"Migrate to {VEO_TARGET.display_name}",
+                icon="replace",
+                variant="default",
+                full_width=True,
+                tooltip="Google Veo 3.1. Closest match: same prompt and start frame, with generated audio.",
+                on_click=self._on_migrate_to_veo_clicked,
+            )
+        )
+        self.add_parameter(
+            ParameterButton(
+                name="migrate_to_seedance",
+                label=f"Migrate to {SEEDANCE_TARGET.display_name}",
+                icon="replace",
+                variant="default",
+                full_width=True,
+                tooltip="ByteDance Seedance 2.0. Supports longer clip durations Veo does not.",
+                on_click=self._on_migrate_to_seedance_clicked,
+            )
+        )
 
         # INPUTS / PROPERTIES
         model_param = ParameterString(
@@ -226,6 +301,29 @@ class SoraVideoGeneration(GriptapeProxyNode):
     async def aprocess(self) -> None:
         await self._process_generation()
 
+    def _on_migrate_to_veo_clicked(
+        self,
+        button: Button,  # noqa: ARG002
+        button_details: ButtonDetailsMessagePayload,  # noqa: ARG002
+    ) -> NodeMessageResult:
+        return self._migrate(VEO_TARGET)
+
+    def _on_migrate_to_seedance_clicked(
+        self,
+        button: Button,  # noqa: ARG002
+        button_details: ButtonDetailsMessagePayload,  # noqa: ARG002
+    ) -> NodeMessageResult:
+        return self._migrate(SEEDANCE_TARGET)
+
+    def _migrate(self, target: MigrationTarget) -> NodeMessageResult:
+        try:
+            outcome = migrate_sora_node(self, target)
+        except RuntimeError as e:
+            # Nothing was created or rewired on this path, so the graph is untouched.
+            return NodeMessageResult(success=False, details=str(e), altered_workflow_state=False)
+        self._log(f"Migrated '{self.name}' to '{outcome.new_node_name}' ({outcome.display_name})")
+        return NodeMessageResult(success=True, details=outcome.summary())
+
     def _get_parameters(self) -> dict[str, Any]:
         seconds_value = self.get_parameter_value("seconds")
         if isinstance(seconds_value, list):
@@ -265,31 +363,22 @@ class SoraVideoGeneration(GriptapeProxyNode):
 
         return json_data
 
-    async def _parse_result(self, result_json: dict[str, Any], _generation_id: str) -> None:
-        # Handle binary response from proxy if returned
-        if "raw_bytes" in result_json:
-            await self._handle_video_completion(result_json["raw_bytes"])
-            return
-
-        # Check for video URL in response
-        video_url = result_json.get("video_url") or result_json.get("url")
-        if isinstance(video_url, str) and video_url:
-            await self._handle_video_url_completion(video_url)
-            return
-
-        # Check for error status
-        status = result_json.get("status")
-        if isinstance(status, str) and status.lower() in {"failed", "error"}:
-            error_details = self._extract_error_message(result_json)
-            self.parameter_output_values["video_url"] = None
+    async def _parse_result(self, result_json: dict[str, Any], generation_id: str) -> None:
+        status = str(result_json.get("status") or "").lower()
+        if status in {"failed", "error"}:
+            self._set_safe_defaults()
+            error_details = self._provider_failure_message(
+                self._extract_error_message(result_json),
+                f"The generation ended as '{status}' and the provider gave no reason.",
+            )
             self._set_status_results(was_successful=False, result_details=error_details)
             return
 
-        # Final fallback
-        self.parameter_output_values["video_url"] = None
-        self._set_status_results(
-            was_successful=False,
-            result_details="Generation completed but no video data was found in the response.",
+        await self._save_generated_media(
+            generation_id,
+            "video_url",
+            lambda v, n: VideoUrlArtifact(value=v, name=n),
+            kind=ArtifactKind.VIDEO,
         )
 
     def _process_start_frame(self, start_frame: Any, expected_size: str) -> str | None:
@@ -331,39 +420,29 @@ class SoraVideoGeneration(GriptapeProxyNode):
         return base64_string
 
     def _extract_error_message(self, response_json: dict[str, Any] | None) -> str:
-        """Extract error details from API response.
+        """Extract the provider's reason from a failed generation response.
 
         Args:
             response_json: The JSON response from the API that may contain error information
 
         Returns:
-            A formatted error message string
+            The provider's reason, or "" if there is none
         """
         if not response_json:
-            return "Generation failed with no error details provided by API."
+            return ""
 
-        top_level_error = response_json.get("error")
+        top_level_reason = self._error_reason(response_json.get("error"))
         parsed_provider_response = self._parse_provider_response(response_json.get("provider_response"))
+        provider_reason = self._error_reason((parsed_provider_response or {}).get("error"))
 
-        # Try to extract from provider response first (more detailed)
-        provider_error_msg = self._format_provider_error(parsed_provider_response, top_level_error)
-        if provider_error_msg:
-            return provider_error_msg
-
-        # Fall back to top-level error
-        if top_level_error:
-            return self._format_top_level_error(top_level_error)
-
-        # Final fallback
-        status = response_json.get("status", "unknown")
-        return f"Generation failed with status '{status}'.\n\nFull API response:\n{response_json}"
+        if top_level_reason and provider_reason and top_level_reason != provider_reason:
+            return f"{top_level_reason}: {provider_reason}"
+        return provider_reason or top_level_reason or super()._extract_error_message(response_json)
 
     def _parse_provider_response(self, provider_response: Any) -> dict[str, Any] | None:
         """Parse provider_response if it's a JSON string."""
         if isinstance(provider_response, str):
             try:
-                import json as _json
-
                 return _json.loads(provider_response)
             except Exception:
                 return None
@@ -371,66 +450,14 @@ class SoraVideoGeneration(GriptapeProxyNode):
             return provider_response
         return None
 
-    def _format_provider_error(
-        self, parsed_provider_response: dict[str, Any] | None, top_level_error: Any
-    ) -> str | None:
-        """Format error message from parsed provider response."""
-        if not parsed_provider_response:
-            return None
-
-        provider_error = parsed_provider_response.get("error")
-        if not provider_error:
-            return None
-
-        if isinstance(provider_error, dict):
-            error_message = provider_error.get("message", "")
-            details = f"{error_message}"
-
-            if error_code := provider_error.get("code"):
-                details += f"\nError Code: {error_code}"
-            if error_type := provider_error.get("type"):
-                details += f"\nError Type: {error_type}"
-            if top_level_error:
-                details = f"{top_level_error}\n\n{details}"
-            return details
-
-        error_msg = str(provider_error)
-        if top_level_error:
-            return f"{top_level_error}\n\nProvider error: {error_msg}"
-        return f"Generation failed. Provider error: {error_msg}"
-
-    def _format_top_level_error(self, top_level_error: Any) -> str:
-        """Format error message from top-level error field."""
-        if isinstance(top_level_error, dict):
-            error_msg = top_level_error.get("message") or top_level_error.get("error") or str(top_level_error)
-            return f"Generation failed with error: {error_msg}\n\nFull error details:\n{top_level_error}"
-        return f"Generation failed with error: {top_level_error!s}"
-
-    async def _handle_video_completion(self, video_bytes: bytes) -> None:
-        """Handle completion when video data is received."""
-        if not video_bytes:
-            self.parameter_output_values["video_url"] = None
-            self._set_status_results(was_successful=False, result_details="Received empty video data from API.")
-            return
-
-        try:
-            dest = self._output_file.build_file()
-            saved = await dest.awrite_bytes(video_bytes)
-            self.parameter_output_values["video_url"] = VideoUrlArtifact(value=saved.location, name=saved.name)
-            self._log(f"Saved video as {saved.name}")
-            self._set_status_results(
-                was_successful=True, result_details=f"Video generated successfully and saved as {saved.name}."
-            )
-        except Exception as e:
-            self._log(f"Failed to save video: {e}")
-            self.parameter_output_values["video_url"] = None
-            self._set_status_results(
-                was_successful=False, result_details=f"Video generation completed but failed to save: {e}"
-            )
-
-    async def _handle_video_url_completion(self, video_url: str) -> None:
-        """Handle completion when a video URL is received."""
-        await self._download_and_save(video_url, "video_url", lambda v, n: VideoUrlArtifact(value=v, name=n))
+    @staticmethod
+    def _error_reason(error: Any) -> str:
+        """The readable message in an error field, or "" if it has none."""
+        if not error:
+            return ""
+        if isinstance(error, dict):
+            return str(error.get("message") or error.get("error") or "")
+        return str(error)
 
     def _load_pil_from_input(self, image_value: Any) -> Image.Image | None:
         if isinstance(image_value, dict):

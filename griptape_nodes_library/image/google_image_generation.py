@@ -4,10 +4,9 @@ import asyncio
 import base64
 import json
 import logging
+from dataclasses import dataclass, field
 from typing import Any, ClassVar
-from urllib.parse import urljoin
 
-import httpx
 from griptape.artifacts import ImageArtifact
 from griptape.artifacts.image_url_artifact import ImageUrlArtifact
 from griptape_nodes.exe_types.core_types import Parameter, ParameterGroup, ParameterList, ParameterMode
@@ -22,7 +21,7 @@ from griptape_nodes.files.file import File, FileLoadError
 from griptape_nodes.traits.options import Options
 from griptape_nodes.utils.artifact_normalization import normalize_artifact_list
 
-from griptape_nodes_library.proxy import GriptapeProxyNode
+from griptape_nodes_library.proxy import ArtifactKind, GriptapeProxyNode
 from griptape_nodes_library.utils.image_utils import shrink_image_to_size
 
 logger = logging.getLogger("griptape_nodes")
@@ -37,6 +36,17 @@ MAX_HUMAN_IMAGES = 5
 
 # Maximum image size in bytes (7MB)
 MAX_IMAGE_SIZE_BYTES = 7 * 1024 * 1024
+
+
+@dataclass
+class _SavedImages:
+    """The images saved from a generation, and why any are missing."""
+
+    artifacts: list[ImageUrlArtifact] = field(default_factory=list)
+    # Set when the artifact list itself could not be read, which is a different cause
+    # from a generation that hosted no images.
+    listing_error: str | None = None
+    unretrieved: int = 0
 
 
 class GoogleImageGeneration(GriptapeProxyNode):
@@ -122,7 +132,14 @@ class GoogleImageGeneration(GriptapeProxyNode):
         self.add_parameter(
             ParameterList(
                 name="input_images",
-                input_types=["ImageUrlArtifact", "ImageArtifact", "str"],
+                input_types=[
+                    "ImageUrlArtifact",
+                    "ImageArtifact",
+                    "str",
+                    "list",
+                    "list[ImageArtifact]",
+                    "list[ImageUrlArtifact]",
+                ],
                 default_value=[],
                 tooltip="Optional reference images for the generation",
                 allowed_modes={ParameterMode.INPUT},
@@ -318,7 +335,7 @@ class GoogleImageGeneration(GriptapeProxyNode):
         exceptions = super().validate_before_node_run() or []
         prompt = self.get_parameter_value("prompt")
         if not prompt:
-            exceptions.append(ValueError(f"{self.name} prompt must be provided"))
+            exceptions.append(ValueError("'Prompt' is empty. Describe the image you want."))
 
         # Get all image lists
         input_images = self.get_parameter_list_value("input_images") or []
@@ -328,9 +345,11 @@ class GoogleImageGeneration(GriptapeProxyNode):
         # Validate combined image count does not exceed maximum
         total_images = len(input_images) + len(object_images) + len(human_images)
         if total_images > MAX_INPUT_IMAGES:
-            exceptions.append(
-                ValueError(f"{self.name} total input images cannot exceed {MAX_INPUT_IMAGES}, got {total_images}")
+            msg = (
+                f"{total_images} input images are connected and the limit is {MAX_INPUT_IMAGES}. "
+                "Remove some from 'Input Images'."
             )
+            exceptions.append(ValueError(msg))
 
         return exceptions or None
 
@@ -406,51 +425,16 @@ class GoogleImageGeneration(GriptapeProxyNode):
     async def _build_payload(self) -> dict[str, Any]:
         return await self._get_parameters()
 
-    async def _parse_result(self, result_json: dict[str, Any], _generation_id: str) -> None:
-        await self._handle_response(result_json)
+    async def _parse_result(self, result_json: dict[str, Any], generation_id: str) -> None:
+        await self._handle_response(result_json, generation_id)
 
-    async def _submit_request_and_process(self, params: dict[str, Any], headers: dict[str, str]) -> None:
-        post_url = urljoin(self._proxy_base, f"models/{params['model']}")
-        payload = params
-
-        msg = f"{self.name} submitting request to proxy model={params['model']}"
-        logger.info(msg)
-
-        try:
-            async with httpx.AsyncClient() as client:
-                post_resp = await client.post(post_url, json=payload, headers=headers, timeout=None)
-                post_resp.raise_for_status()
-                response_json = post_resp.json()
-        except httpx.HTTPStatusError as e:
-            self._set_safe_defaults()
-            msg = f"{self.name} proxy POST error status={e.response.status_code} headers={dict(e.response.headers)} body={e.response.text}"
-            logger.info(msg)
-            try:
-                error_json = e.response.json()
-                error_details = self._extract_error_details(error_json)
-                msg = f"{self.name} {error_details}"
-            except Exception:
-                msg = f"{self.name} proxy POST error: {e.response.status_code} - {e.response.text}"
-            raise RuntimeError(msg) from e
-        except Exception as e:
-            self._set_safe_defaults()
-            msg = f"{self.name} proxy POST request failed: {e}"
-            logger.info(msg)
-            raise RuntimeError(msg) from e
-
-        msg = f"{self.name} received response from API"
-        logger.info(msg)
-
-        # Process the response immediately
-        await self._handle_response(response_json)
-
-    async def _handle_response(self, response_json: dict[str, Any] | None) -> None:
-        """Parse Gemini API response structure and extract images and text."""
+    async def _handle_response(self, response_json: dict[str, Any] | None, generation_id: str) -> None:
+        """Parse Gemini API response structure for text; images come from hosted artifacts."""
         if not response_json:
             self._set_safe_defaults()
             self._set_status_results(
                 was_successful=False,
-                result_details=f"{self.name} received empty response from API.",
+                result_details="The provider returned an empty response.",
             )
             return
 
@@ -459,113 +443,96 @@ class GoogleImageGeneration(GriptapeProxyNode):
             self._set_safe_defaults()
             self._set_status_results(
                 was_successful=False,
-                result_details=f"{self.name} no candidates found in response.",
+                result_details="The provider's response contained no candidates.",
             )
             return
 
-        image_artifacts = []
         text_outputs = []
+        for candidate in candidates:
+            self._process_candidate(candidate, text_outputs)
 
-        for candidate_idx, candidate in enumerate(candidates):
-            self._process_candidate(candidate, candidate_idx, image_artifacts, text_outputs)
+        saved = await self._save_images(generation_id)
+        self._store_results(saved, text_outputs)
 
-        self._store_results(image_artifacts, text_outputs)
-
-    def _process_candidate(
-        self,
-        candidate: dict[str, Any],
-        candidate_idx: int,
-        image_artifacts: list[ImageUrlArtifact],
-        text_outputs: list[str],
-    ) -> None:
-        """Process a single candidate and extract images and text."""
+    def _process_candidate(self, candidate: dict[str, Any], text_outputs: list[str]) -> None:
+        """Collect a candidate's text parts. Image parts are read from hosted artifacts."""
         content = candidate.get("content", {})
-        parts = content.get("parts", [])
+        for part in content.get("parts", []):
+            if "text" in part:
+                text_outputs.append(part["text"])
 
-        for part_idx, part in enumerate(parts):
-            self._process_part(part, candidate_idx, part_idx, image_artifacts, text_outputs)
+    async def _save_images(self, generation_id: str) -> _SavedImages:
+        """Save every hosted image, in provider order.
 
-    def _process_part(
-        self,
-        part: dict[str, Any],
-        candidate_idx: int,
-        part_idx: int,
-        image_artifacts: list[ImageUrlArtifact],
-        text_outputs: list[str],
-    ) -> None:
-        """Process a single part and extract text or image data."""
-        if "text" in part:
-            text_outputs.append(part["text"])
-
-        inline_data = part.get("inlineData")
-        if inline_data:
-            self._process_inline_image(inline_data, candidate_idx, part_idx, image_artifacts)
-
-    def _process_inline_image(
-        self,
-        inline_data: dict[str, Any],
-        candidate_idx: int,
-        part_idx: int,
-        image_artifacts: list[ImageUrlArtifact],
-    ) -> None:
-        """Process inline image data and save to static storage."""
-        base64_data = inline_data.get("data", "")
-
-        if not base64_data:
-            return
-
+        Keeps the three ways this can come back short apart, since they are three
+        different causes for a user to chase: the list could not be read, the
+        generation hosted nothing, or the bytes could not be downloaded.
+        """
         try:
-            image_bytes = base64.b64decode(base64_data)
-            dest = self._output_file.build_file()
-            saved = dest.write_bytes(image_bytes)
-            image_artifacts.append(ImageUrlArtifact(value=saved.location, name=saved.name))
-
-            msg = f"{self.name} saved image from candidate {candidate_idx + 1}, part {part_idx + 1}"
-            logger.info(msg)
+            hosted = [a for a in await self._hosted_artifacts(generation_id) if a.kind == ArtifactKind.IMAGE]
         except Exception as e:
-            msg = f"{self.name} failed to process image from candidate {candidate_idx + 1}: {e}"
-            logger.info(msg)
+            logger.warning("%s hosted images could not be listed: %s", self.name, e)
+            return _SavedImages(artifacts=[], listing_error=str(e))
 
-    def _store_results(self, image_artifacts: list[ImageUrlArtifact], text_outputs: list[str]) -> None:
+        image_artifacts = []
+        unretrieved = 0
+        for position in range(len(hosted)):
+            try:
+                image_bytes = await self._load_generated_media(
+                    generation_id, kind=ArtifactKind.IMAGE, position=position
+                )
+                dest = self._output_file.build_file()
+                saved = await dest.awrite_bytes(image_bytes)
+            except Exception as e:
+                logger.warning("%s failed to save image %s: %s", self.name, position, e)
+                unretrieved += 1
+                continue
+            image_artifacts.append(ImageUrlArtifact(value=saved.location, name=saved.name))
+            logger.info("%s saved image %s", self.name, saved.name)
+
+        return _SavedImages(artifacts=image_artifacts, unretrieved=unretrieved)
+
+    def _store_results(self, saved: _SavedImages, text_outputs: list[str]) -> None:
         """Store image and text results and set status."""
         self.parameter_output_values["text"] = "\n".join(text_outputs) if text_outputs else ""
 
-        if image_artifacts:
-            self.parameter_output_values["all_images"] = image_artifacts
-            self.parameter_output_values["image"] = image_artifacts[0]
-            count = len(image_artifacts)
+        if saved.artifacts:
+            self.parameter_output_values["all_images"] = saved.artifacts
+            self.parameter_output_values["image"] = saved.artifacts[0]
+            count = len(saved.artifacts)
             details = f"{self.name} generated {count} image{'s' if count > 1 else ''} successfully."
+            if saved.unretrieved:
+                details += f" {saved.unretrieved} image(s) could not be retrieved."
             if text_outputs:
                 details += "\n\nModel commentary:\n" + "\n".join(text_outputs)
             self._set_status_results(was_successful=True, result_details=details)
         else:
             self.parameter_output_values["image"] = None
             self.parameter_output_values["all_images"] = []
-            details = f"{self.name} no images found in response."
+            if saved.listing_error:
+                details = f"The generation finished, but its images could not be listed: {saved.listing_error}"
+            elif saved.unretrieved:
+                details = "The generation finished, but the image(s) could not be retrieved."
+            else:
+                details = "The generation finished, but no images were hosted."
             if text_outputs:
                 details += "\n\nModel text output:\n" + "\n".join(text_outputs)
             self._set_status_results(was_successful=False, result_details=details)
 
-    def _extract_error_details(self, response_json: dict[str, Any] | None) -> str:
-        """Extract error details from API response."""
+    def _extract_error_message(self, response_json: dict[str, Any] | None) -> str:
         if not response_json:
-            return f"{self.name} generation failed with no error details provided by API."
+            return ""
 
-        top_level_error = response_json.get("error")
         parsed_provider_response = self._parse_provider_response(response_json.get("provider_response"))
-
-        provider_error_msg = self._format_provider_error(parsed_provider_response, top_level_error)
+        provider_error_msg = self._format_provider_error(parsed_provider_response)
         if provider_error_msg:
             return provider_error_msg
 
+        top_level_error = response_json.get("error")
         if top_level_error:
             return self._format_top_level_error(top_level_error)
 
-        status = self._extract_status(response_json) or "unknown"
-        return f"{self.name} generation failed with status '{status}'.\n\nFull API response:\n{response_json}"
-
-    def _extract_error_message(self, response_json: dict[str, Any] | None) -> str:
-        return self._extract_error_details(response_json)
+        return super()._extract_error_message(response_json)
 
     def _parse_provider_response(self, provider_response: Any) -> dict[str, Any] | None:
         """Parse provider_response if it's a JSON string."""
@@ -578,40 +545,24 @@ class GoogleImageGeneration(GriptapeProxyNode):
             return provider_response
         return None
 
-    def _format_provider_error(
-        self, parsed_provider_response: dict[str, Any] | None, top_level_error: Any
-    ) -> str | None:
-        """Format error message from parsed provider response."""
+    def _format_provider_error(self, parsed_provider_response: dict[str, Any] | None) -> str:
+        """The provider's own error message from its parsed response, or "" if there is none."""
         if not parsed_provider_response:
-            return None
+            return ""
 
         provider_error = parsed_provider_response.get("error")
         if not provider_error:
-            return None
+            return ""
 
         if isinstance(provider_error, dict):
-            error_message = provider_error.get("message", "")
-            details = f"{self.name} {error_message}"
-
-            if error_code := provider_error.get("code"):
-                details += f"\nError Code: {error_code}"
-            if error_type := provider_error.get("type"):
-                details += f"\nError Type: {error_type}"
-            if top_level_error:
-                details = f"{self.name} {top_level_error}\n\n{details}"
-            return details
-
-        error_msg = str(provider_error)
-        if top_level_error:
-            return f"{self.name} {top_level_error}\n\nProvider error: {error_msg}"
-        return f"{self.name} generation failed. Provider error: {error_msg}"
+            return str(provider_error.get("message") or "")
+        return str(provider_error)
 
     def _format_top_level_error(self, top_level_error: Any) -> str:
-        """Format error message from top-level error field."""
+        """The message from the top-level error field, or "" if it has none."""
         if isinstance(top_level_error, dict):
-            error_msg = top_level_error.get("message") or top_level_error.get("error") or str(top_level_error)
-            return f"{self.name} generation failed with error: {error_msg}\n\nFull error details:\n{top_level_error}"
-        return f"{self.name} generation failed with error: {top_level_error!s}"
+            return str(top_level_error.get("message") or top_level_error.get("error") or "")
+        return str(top_level_error)
 
     def _set_safe_defaults(self) -> None:
         self.parameter_output_values["image"] = None
@@ -745,7 +696,10 @@ class GoogleImageGeneration(GriptapeProxyNode):
         max_mb = MAX_IMAGE_SIZE_BYTES / (1024 * 1024)
 
         if not auto_image_resize:
-            msg = f"{self.name} input image exceeds maximum size of {max_mb:.0f}MB (image is {size_mb:.2f}MB)"
+            msg = (
+                f"An input image is {size_mb:.2f}MB and the limit is {max_mb:.0f}MB. "
+                "Turn on 'Auto Image Resize' or use a smaller image."
+            )
             raise ValueError(msg)
 
         # Try to shrink the image
@@ -782,14 +736,4 @@ class GoogleImageGeneration(GriptapeProxyNode):
             msg = f"{self.name} failed to extract image value: {e}"
             logger.info(msg)
 
-        return None
-
-    @staticmethod
-    def _extract_status(obj: dict[str, Any] | None) -> str | None:
-        if not obj:
-            return None
-        if "status" in obj:
-            status_val = obj.get("status")
-            if isinstance(status_val, str):
-                return status_val
         return None

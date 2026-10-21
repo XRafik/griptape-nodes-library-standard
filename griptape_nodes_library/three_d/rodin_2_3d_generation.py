@@ -511,15 +511,16 @@ class Rodin23DGeneration(GriptapeProxyNode):
             logger.debug("%s failed to load image value: %s", self.name, image_value)
             return None
 
-    async def _parse_result(self, result_json: dict[str, Any], _generation_id: str) -> None:
+    async def _parse_result(self, result_json: dict[str, Any], generation_id: str) -> None:
         params = self._get_parameters()
-        await self._handle_success(result_json, params)
+        await self._handle_success(result_json, params, generation_id)
 
-    async def _handle_success(self, response: dict[str, Any], params: dict[str, Any]) -> None:
+    async def _handle_success(self, response: dict[str, Any], params: dict[str, Any], generation_id: str) -> None:
         """Handle successful generation result."""
         self.parameter_output_values["provider_response"] = response
 
-        # Get download URLs - the proxy returns 'downloads' list at top level
+        # Get download entries (name + provider URL) - the proxy returns 'downloads' at
+        # top level. Names are read from here; bytes come from the hosted artifacts.
         files = response.get("downloads", [])
         if not files:
             # Try nested in result object
@@ -536,10 +537,16 @@ class Rodin23DGeneration(GriptapeProxyNode):
             return
 
         # Download and save all files
-        await self._save_model_files(files, params)
+        await self._save_model_files(files, params, generation_id)
 
-    async def _save_model_files(self, files: list[dict[str, Any]], params: dict[str, Any]) -> None:
-        """Download and save the generated 3D model files.
+    async def _save_model_files(self, files: list[dict[str, Any]], params: dict[str, Any], generation_id: str) -> None:
+        """Save the generation's hosted files, matched positionally to Rodin's download list.
+
+        The artifact list carries no filename, so a file's name comes from Rodin's
+        `downloads` entries; its bytes come from the hosted artifact at the same
+        position. Both lists are filtered to entries that report a URL, exactly as
+        the proxy's Rodin client filters before hosting, so position i means the
+        same file in both.
 
         The preview (.webp) is saved to the user-configured `output_file` path; all
         other files (mesh, textures, materials) are saved alongside it in the same
@@ -553,7 +560,8 @@ class Rodin23DGeneration(GriptapeProxyNode):
         """
         requested_format = params["geometry_file_format"]
 
-        received_names = [f.get("name", "") for f in files]
+        files_with_url = [f for f in files if isinstance(f.get("url"), str) and f.get("url")]
+        received_names = [f.get("name", "") for f in files_with_url]
         if not any(name.lower().endswith(f".{requested_format}") for name in received_names):
             logger.warning(
                 "Rodin did not return a .%s file in the response; received: %s",
@@ -569,6 +577,51 @@ class Rodin23DGeneration(GriptapeProxyNode):
             )
             return
 
+        try:
+            hosted = await self._hosted_artifacts(generation_id)
+        except Exception as e:
+            self._set_safe_defaults()
+            self._set_status_results(
+                was_successful=False,
+                result_details=f"Generation completed but its files could not be listed: {e}",
+            )
+            return
+
+        if len(hosted) > len(files_with_url):
+            self._set_safe_defaults()
+            self._set_status_results(
+                was_successful=False,
+                result_details=(
+                    f"Rodin reported {len(files_with_url)} file(s) but the proxy hosts {len(hosted)}; "
+                    f"refusing to guess which bytes belong to which name."
+                ),
+            )
+            return
+
+        # A short list is truncation: the proxy hosts a prefix of what the client
+        # reported and gives up the rest, so pairing by position stays correct and the
+        # files that did arrive are still worth saving.
+        dropped = len(files_with_url) - len(hosted)
+        if dropped:
+            logger.warning(
+                "%s: the proxy hosts %d of Rodin's %d file(s); saving what arrived",
+                self.name,
+                len(hosted),
+                len(files_with_url),
+            )
+            files_with_url = files_with_url[: len(hosted)]
+            received_names = [f.get("name", "") for f in files_with_url]
+            if not any(name.lower().endswith(f".{requested_format}") for name in received_names):
+                self._set_safe_defaults()
+                self._set_status_results(
+                    was_successful=False,
+                    result_details=(
+                        f"Rodin returned a .{requested_format} file but the proxy hosted only "
+                        f"{len(hosted)} of {len(hosted) + dropped} file(s), none of them that one."
+                    ),
+                )
+                return
+
         preview_name = next(
             (name for name in received_names if name.lower().endswith(".webp")),
             None,
@@ -577,16 +630,12 @@ class Rodin23DGeneration(GriptapeProxyNode):
         # Download everything up front so we can pick the primary by byte size
         # before saving (largest file matching the requested extension wins).
         downloaded: list[tuple[str, bytes]] = []
-        for idx, file_info in enumerate(files):
-            file_url = file_info.get("url")
-            file_name = file_info.get("name", f"model_{idx}.{requested_format}")
-            if not file_url:
-                continue
+        for idx, (file_info, artifact) in enumerate(zip(files_with_url, hosted, strict=True)):
+            file_name = file_info.get("name") or f"model_{idx}.{requested_format}"
             try:
                 self._log(f"Downloading file: {file_name}")
-                file_bytes = await self._download_bytes_from_url(file_url)
-                if file_bytes:
-                    downloaded.append((file_name, file_bytes))
+                file_bytes = await self._download_artifact(artifact)
+                downloaded.append((file_name, file_bytes))
             except Exception as e:
                 self._log(f"Failed to download file {file_name}: {e}")
 
@@ -684,30 +733,23 @@ class Rodin23DGeneration(GriptapeProxyNode):
                 result_details="Generation completed but failed to save model files.",
             )
 
-    def _extract_error_details(self, response_json: dict[str, Any] | None) -> str:
-        """Extract error details from API response."""
-        if not response_json:
-            return "Generation failed with no error details provided by API."
-
-        # Try various error sources in order of priority
-        error_msg = self._get_error_from_result(response_json)
-        if not error_msg:
-            error_msg = self._get_error_from_provider(response_json)
-        if not error_msg:
-            error_msg = self._get_error_from_top_level(response_json)
-        if not error_msg:
-            error_msg = self._get_error_from_status(response_json)
-
-        return error_msg or f"Generation failed.\n\nFull API response:\n{response_json}"
-
     def _extract_error_message(self, response_json: dict[str, Any] | None) -> str:
-        return self._extract_error_details(response_json)
+        """Return Rodin's reason for a failed generation, or "" if it gave none."""
+        if not response_json:
+            return ""
+
+        return (
+            self._get_error_from_result(response_json)
+            or self._get_error_from_provider(response_json)
+            or self._get_error_from_top_level(response_json)
+            or super()._extract_error_message(response_json)
+        )
 
     def _get_error_from_result(self, response_json: dict[str, Any]) -> str | None:
         """Extract error from result field."""
         result = response_json.get("result", {})
         if isinstance(result, dict) and result.get("error"):
-            return f"Generation failed: {result['error']}"
+            return str(result["error"])
         return None
 
     def _get_error_from_provider(self, response_json: dict[str, Any]) -> str | None:
@@ -716,7 +758,7 @@ class Rodin23DGeneration(GriptapeProxyNode):
         if provider_response:
             parsed = self._parse_provider_response(provider_response)
             if parsed and parsed.get("error"):
-                return f"Generation failed: {parsed['error']}"
+                return str(parsed["error"])
         return None
 
     def _get_error_from_top_level(self, response_json: dict[str, Any]) -> str | None:
@@ -724,15 +766,8 @@ class Rodin23DGeneration(GriptapeProxyNode):
         top_level_error = response_json.get("error")
         if top_level_error:
             if isinstance(top_level_error, dict):
-                return f"Generation failed: {top_level_error.get('message', str(top_level_error))}"
-            return f"Generation failed: {top_level_error}"
-        return None
-
-    def _get_error_from_status(self, response_json: dict[str, Any]) -> str | None:
-        """Extract error from status field."""
-        status = response_json.get("status")
-        if status == STATUS_FAILED:
-            return f"Generation failed with status '{status}'."
+                return str(top_level_error.get("message") or top_level_error.get("error") or "") or None
+            return str(top_level_error)
         return None
 
     def _parse_provider_response(self, provider_response: Any) -> dict[str, Any] | None:

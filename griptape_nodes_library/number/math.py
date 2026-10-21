@@ -2,6 +2,7 @@ from typing import Any
 
 from griptape_nodes.exe_types.core_types import Parameter, ParameterMode
 from griptape_nodes.exe_types.node_types import ControlNode
+from griptape_nodes.exe_types.param_types.parameter_float import ParameterFloat
 from griptape_nodes.traits.options import Options
 
 operations = [
@@ -44,30 +45,27 @@ class Math(ControlNode):
             )
         )
         self.add_parameter(
-            Parameter(
+            ParameterFloat(
                 name="A",
                 tooltip="First Number",
-                input_types=["int", "float"],
                 default_value=0,
                 allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
             )
         )
         self.add_parameter(
-            Parameter(
+            ParameterFloat(
                 name="B",
                 tooltip="Second Number",
-                input_types=["int", "float"],
                 default_value=0,
                 allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
             )
         )
         self.add_parameter(
-            Parameter(
+            ParameterFloat(
                 name="result",
                 tooltip="result of the condition.",
-                type="float",
-                allowed_modes={ParameterMode.OUTPUT},
                 default_value=0.0,
+                allowed_modes={ParameterMode.OUTPUT},
                 ui_options={"hide": False},
             )
         )

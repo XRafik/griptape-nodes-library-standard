@@ -25,7 +25,9 @@ from griptape_nodes.exe_types.param_types.parameter_video import ParameterVideo
 from griptape_nodes.files.file import File, FileLoadError
 from PIL import Image
 
-from griptape_nodes_library.proxy import GriptapeProxyNode
+from griptape_nodes_library.media.public_urls import adelete_uploaded_artifacts, gather_limited
+from griptape_nodes_library.proxy import ArtifactKind, GriptapeProxyNode
+from griptape_nodes_library.utils.griptape_cloud_headers import build_griptape_cloud_headers_async
 from griptape_nodes_library.utils.image_utils import (
     extract_image_url,
     resize_image_for_resolution,
@@ -233,8 +235,9 @@ class OmnihumanVideoGeneration(GriptapeProxyNode):
         try:
             await self._process_generation()
         finally:
-            self._public_image_url_parameter.delete_uploaded_artifact()
-            self._public_audio_url_parameter.delete_uploaded_artifact()
+            await adelete_uploaded_artifacts(
+                (self._public_image_url_parameter, self._public_audio_url_parameter), node_name=self.name
+            )
 
     async def _resolve_public_image_url(self) -> str:
         """Return a public URL for the input image, resizing first if it exceeds limits.
@@ -251,7 +254,7 @@ class OmnihumanVideoGeneration(GriptapeProxyNode):
             await resized_file.awrite_bytes(resized_bytes)
             self.set_parameter_value("image_url", ImageUrlArtifact(resized_file.location))
 
-        return self._public_image_url_parameter.get_public_url_for_parameter()
+        return await self._public_image_url_parameter.aget_public_url_for_parameter()
 
     def _resized_image_path(self) -> str:
         """Workspace path for the resized copy of the input image."""
@@ -290,10 +293,12 @@ class OmnihumanVideoGeneration(GriptapeProxyNode):
         if not auto_image_resize:
             issues = []
             if exceeds_size:
-                issues.append(f"size {size_mb:.2f}MB exceeds {max_mb:.0f}MB limit")
+                issues.append(f"its size {size_mb:.2f}MB is over the {max_mb:.0f}MB limit")
             if exceeds_resolution:
-                issues.append(f"resolution {width}x{height} exceeds {MAX_IMAGE_DIMENSION}x{MAX_IMAGE_DIMENSION} limit")
-            msg = f"{self.name} input image: {', '.join(issues)}"
+                issues.append(
+                    f"its resolution {width}x{height} is over the {MAX_IMAGE_DIMENSION}x{MAX_IMAGE_DIMENSION} limit"
+                )
+            msg = f"The input image is too large: {' and '.join(issues)}. Turn on 'auto_image_resize' or use a smaller image."
             raise ValueError(msg)
 
         # Log what needs to be fixed
@@ -359,17 +364,18 @@ class OmnihumanVideoGeneration(GriptapeProxyNode):
         fast_mode = self.get_parameter_value("fast_mode")
 
         if not image_input:
-            msg = "image_url parameter is required."
+            msg = "Connect an image to 'image_url'."
             raise ValueError(msg)
 
         if not audio_input:
-            msg = "audio_url parameter is required."
+            msg = "Connect audio to 'audio_url'."
             raise ValueError(msg)
 
         # OmniHuman downloads the image and audio server-side, so they need
         # publicly reachable URLs rather than inline data URIs.
-        image_url = await self._resolve_public_image_url()
-        audio_url = self._public_audio_url_parameter.get_public_url_for_parameter()
+        image_url, audio_url = await gather_limited(
+            [self._resolve_public_image_url(), self._public_audio_url_parameter.aget_public_url_for_parameter()]
+        )
 
         # Handle artifacts
         if hasattr(mask_image_urls, "value"):
@@ -405,7 +411,7 @@ class OmnihumanVideoGeneration(GriptapeProxyNode):
 
     async def _auto_detect_masks(self, image_url: str) -> list[str]:
         """Automatically detect masks by calling the subject detection API."""
-        headers = {"Authorization": f"Bearer {self._validate_api_key()}", "Content-Type": "application/json"}
+        headers = await build_griptape_cloud_headers_async(self._validate_api_key(), attribution=True)
 
         # Build payload for subject detection
         provider_params = {
@@ -454,12 +460,7 @@ class OmnihumanVideoGeneration(GriptapeProxyNode):
         params = await self._get_parameters()
         return params
 
-    async def _parse_result(self, result_json: dict[str, Any], _generation_id: str) -> None:
-        # Handle binary response if returned
-        if "raw_bytes" in result_json:
-            await self._handle_video_bytes(result_json["raw_bytes"])
-            return
-
+    async def _parse_result(self, result_json: dict[str, Any], generation_id: str) -> None:
         provider_response = result_json.get("provider_response", result_json)
         if isinstance(provider_response, str):
             try:
@@ -470,64 +471,17 @@ class OmnihumanVideoGeneration(GriptapeProxyNode):
         status = provider_response.get("data", {}).get("status", "").lower()
         if status in {"not_found", "expired"}:
             self.parameter_output_values["video_url"] = None
-            error_details = f"Video generation failed.\nStatus: {status}\nFull response: {result_json}"
+            logger.error("%s: Video generation did not finish. Response: %s", self.name, result_json)
+            error_details = f"Video generation did not finish. The provider reported status '{status}'."
             self._set_status_results(was_successful=False, result_details=error_details)
             return
 
-        await self._handle_completion(provider_response)
-
-    async def _handle_video_bytes(self, video_bytes: bytes) -> None:
-        if not video_bytes:
-            self.parameter_output_values["video_url"] = None
-            self._set_status_results(was_successful=False, result_details="Received empty video data from API.")
-            return
-
-        try:
-            dest = self._output_file.build_file()
-            saved = await dest.awrite_bytes(video_bytes)
-            self.parameter_output_values["video_url"] = VideoUrlArtifact(value=saved.location, name=saved.name)
-            self._set_status_results(
-                was_successful=True,
-                result_details=f"Video generation completed successfully. Saved as: {saved.name}",
-            )
-        except Exception as e:
-            self.parameter_output_values["video_url"] = None
-            self._set_status_results(
-                was_successful=False, result_details=f"Video generation completed but failed to save: {e}"
-            )
-
-    async def _handle_completion(self, response_json: dict[str, Any]) -> None:
-        """Handle successful completion of video generation."""
-        # Extract provider response
-        provider_response = response_json.get("provider_response", {})
-        if isinstance(provider_response, str):
-            try:
-                provider_response = _json.loads(provider_response)
-            except Exception:
-                provider_response = {}
-
-        # Extract video URL from provider response
-        video_url = self._extract_video_url(provider_response)
-
-        if not video_url:
-            self.parameter_output_values["video_url"] = None
-            self._set_status_results(
-                was_successful=False,
-                result_details="Generation completed but no video URL was found in the response.",
-            )
-            return
-
-        await self._download_and_save(video_url, "video_url", lambda v, n: VideoUrlArtifact(value=v, name=n))
-
-    @staticmethod
-    def _extract_video_url(response_json: dict[str, Any]) -> str | None:
-        """Extract video URL from API response."""
-        # Try direct video_url field
-        video_url = _json.loads(response_json.get("data", {}).get("resp_data", "{}")).get("video_url")
-        if isinstance(video_url, str) and video_url.startswith("http"):
-            return video_url
-
-        return None
+        await self._save_generated_media(
+            generation_id,
+            "video_url",
+            lambda v, n: VideoUrlArtifact(value=v, name=n),
+            kind=ArtifactKind.VIDEO,
+        )
 
     def _set_safe_defaults(self) -> None:
         """Set safe default values for outputs on error."""

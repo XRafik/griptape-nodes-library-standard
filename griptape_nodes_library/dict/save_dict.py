@@ -55,19 +55,12 @@ class SaveDictionary(ControlNode):
         full_output_file = self.parameter_values.get("output_path", None)
         if full_output_file is None or full_output_file == "":
             msg = "Output path is required"
-            logger.error(msg)
             raise ValueError(msg)
 
-        try:
-            with Path(full_output_file).open("w") as f:
-                f.write(str(text))
-            success_msg = f"Saved file: {full_output_file}"
-            logger.info(success_msg)
+        with Path(full_output_file).open("w") as f:
+            f.write(str(text))
+        success_msg = f"Saved file: {full_output_file}"
+        logger.info(success_msg)
 
-            # Set output values
-            self.parameter_output_values["output_path"] = full_output_file
-
-        except Exception as e:
-            error_message = str(e)
-            msg = f"Error saving file: {error_message}"
-            raise ValueError(msg) from e
+        # Set output values
+        self.parameter_output_values["output_path"] = full_output_file

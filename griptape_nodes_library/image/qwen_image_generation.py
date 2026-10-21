@@ -16,10 +16,9 @@ from griptape_nodes.exe_types.param_types.parameter_bool import ParameterBool
 from griptape_nodes.exe_types.param_types.parameter_dict import ParameterDict
 from griptape_nodes.exe_types.param_types.parameter_image import ParameterImage
 from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
-from griptape_nodes.files.file import File
 from griptape_nodes.traits.options import Options
 
-from griptape_nodes_library.proxy import GriptapeProxyNode
+from griptape_nodes_library.proxy import ArtifactKind, GriptapeProxyNode
 
 logger = logging.getLogger("griptape_nodes")
 
@@ -32,14 +31,20 @@ PROMPT_TRUNCATE_LENGTH = 100
 SIZE_OPTIONS = ["1328*1328", "1664*928", "1472*1140", "1140*1472", "928*1664"]
 
 # Model options
-MODEL_OPTIONS = ["qwen-image", "qwen-image-plus"]
+MODEL_OPTIONS = ["qwen-image-3.0"]
 
-# Migrates values saved before the dropdown stored the provider's own model id.
+# Migrates values saved before the dropdown stored the provider's own model id (old
+# display labels and catalog keys), plus models Alibaba has retired. Model Studio stopped
+# serving qwen-image and qwen-image-plus on 2026-10-10 and names qwen-image-3.0 as their
+# replacement, so a saved workflow referencing one migrates rather than calling through:
+# https://www.alibabacloud.com/en/notice/detail?id=2009
 LEGACY_MODEL_VALUES: dict[str, str] = {
-    "Qwen Image": "qwen-image",
-    "Qwen Image Plus": "qwen-image-plus",
-    "gtc_qwen_image": "qwen-image",
-    "gtc_qwen_image_plus": "qwen-image-plus",
+    "Qwen Image": "qwen-image-3.0",
+    "Qwen Image Plus": "qwen-image-3.0",
+    "gtc_qwen_image": "qwen-image-3.0",
+    "gtc_qwen_image_plus": "qwen-image-3.0",
+    "qwen-image": "qwen-image-3.0",
+    "qwen-image-plus": "qwen-image-3.0",
 }
 
 # Response status constants
@@ -52,10 +57,10 @@ STATUS_CONTENT_MODERATED = "Content Moderated"
 class QwenImageGeneration(GriptapeProxyNode):
     """Generate images using Qwen models via Griptape model proxy.
 
-    Documentation: https://www.alibabacloud.com/help/en/model-studio/qwen-image-api
+    Documentation: https://www.alibabacloud.com/help/en/model-studio/qwen-image-generation-and-editing-api-reference
 
     Inputs:
-        - model (str): Qwen model to use ("qwen-image" or "qwen-image-plus", default: "qwen-image")
+        - model (str): Qwen model to use (default: "qwen-image-3.0")
         - prompt (str): Text description of the desired image (max 800 characters)
         - size (str): Output image resolution (default: "1328*1328")
             Available sizes: 1328*1328 (1:1), 1664*928 (16:9), 1472*1140 (4:3), 1140*1472 (3:4), 928*1664 (9:16)
@@ -85,7 +90,7 @@ class QwenImageGeneration(GriptapeProxyNode):
             name="model",
             input_types=["str"],
             type="str",
-            default_value="qwen-image",
+            default_value="qwen-image-3.0",
             tooltip="Select the Qwen model to use",
             allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
         )
@@ -96,7 +101,7 @@ class QwenImageGeneration(GriptapeProxyNode):
             node=self,
             parameter=model_param,
             model_choices=MODEL_OPTIONS,
-            default_model="qwen-image",
+            default_model="qwen-image-3.0",
             deprecated_values=LEGACY_MODEL_VALUES,
         )
 
@@ -119,7 +124,7 @@ class QwenImageGeneration(GriptapeProxyNode):
             ParameterString(
                 name="size",
                 default_value="1328*1328",
-                tooltip="Output image resolution (1328*1328=1:1, 1664*928=16:9, 1472*1140=4:3, 1140*1472=3:4, 928*1664=9:16)",
+                tooltip="Output image resolution:\n\n- `1328×1328` — 1:1\n- `1664×928` — 16:9\n- `1472×1140` — 4:3\n- `1140×1472` — 3:4\n- `928×1664` — 9:16",
                 allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
                 traits={Options(choices=SIZE_OPTIONS)},
             )
@@ -223,24 +228,14 @@ class QwenImageGeneration(GriptapeProxyNode):
 
             logger.info("Request payload: %s", json.dumps(sanitized_payload, indent=2))
 
-    async def _parse_result(self, result_json: dict[str, Any], _generation_id: str) -> None:
-        """Handle Qwen synchronous response and extract image.
+    async def _parse_result(self, result_json: dict[str, Any], generation_id: str) -> None:
+        """Handle Qwen response and save the hosted image.
 
         Response shape:
         {
             "status_code": 200,
             "request_id": "...",
-            "output": {
-                "choices": [
-                    {
-                        "message": {
-                            "content": [
-                                {"image": "https://..."}
-                            ]
-                        }
-                    }
-                ]
-            }
+            ...
         }
         """
         # Extract request_id for generation_id
@@ -252,105 +247,50 @@ class QwenImageGeneration(GriptapeProxyNode):
         if status_code and status_code != HTTPStatus.OK:
             logger.error("Generation failed with status_code: %s", status_code)
             self._set_safe_defaults()
-            error_details = self._extract_error_message(result_json)
+            error_details = self._provider_failure_message(
+                self._extract_error_message(result_json),
+                f"The provider reported status code {status_code} and gave no reason.",
+            )
             self._set_status_results(was_successful=False, result_details=error_details)
             return
 
-        # Extract image URL from response.choices[0].message.content[0].image
-        try:
-            choices = result_json.get("choices", [])
-            choice = choices[0]
-            message = choice.get("message", {})
-            content = message.get("content", [])
-            first_content_item = content[0]
-            image_url = first_content_item.get("image")
-        except Exception as e:
-            logger.error("Failed to extract image URL from response: %s", e)
-            self._set_safe_defaults()
-            self._set_status_results(
-                was_successful=False,
-                result_details="Generation completed but no content found in the response.",
-            )
-            return
-
-        if image_url:
-            await self._save_image_from_url(image_url)
-        else:
-            logger.warning("No image URL found in content")
-            self._set_safe_defaults()
-            self._set_status_results(
-                was_successful=False,
-                result_details="Generation completed but no image URL was found in the response.",
-            )
-
-    async def _save_image_from_url(self, image_url: str) -> None:
-        """Download and save the image from the provided URL.
-
-        A billed generation whose image cannot be retrieved is a failure, not a
-        silent success; the provider URL is surfaced so the user can retrieve it
-        manually.
-        """
-        try:
-            logger.info("Downloading image from URL")
-            image_bytes = await File(image_url).aread_bytes()
-            if not image_bytes:
-                msg = "downloaded image was empty"
-                raise ValueError(msg)  # noqa: TRY301
-            dest = self._output_file.build_file()
-            saved = await dest.awrite_bytes(image_bytes)
-            self.parameter_output_values["image_url"] = ImageUrlArtifact(saved.location)
-            logger.info("Saved image as %s", saved.name)
-            self._set_status_results(
-                was_successful=True, result_details=f"Image generated successfully and saved as {saved.name}."
-            )
-        except Exception as e:
-            logger.error("Failed to retrieve image from %s: %s", image_url, e)
-            self.parameter_output_values["image_url"] = None
-            self._set_status_results(
-                was_successful=False,
-                result_details=(
-                    f"{self.name} generation completed upstream but the image could not be retrieved: {e}. "
-                    f"Provider URL (may be temporary): {image_url}"
-                ),
-            )
+        await self._save_generated_media(
+            generation_id,
+            "image_url",
+            lambda v, _n: ImageUrlArtifact(v),
+            kind=ArtifactKind.IMAGE,
+            media_kind="image",
+        )
 
     def _extract_error_message(self, response_json: dict[str, Any] | None) -> str:
-        """Extract error details from API response.
+        """Return the provider's reason for a failed request, or "" if it gave none.
 
         Args:
             response_json: The JSON response from the API that may contain error information
 
         Returns:
-            A formatted error message string
+            The provider's reason, without the response pasted in
         """
         if not response_json:
-            return "Generation failed with no error details provided by API."
+            return ""
 
-        top_level_error = response_json.get("error")
+        # Try the provider response first, since it is more detailed
         parsed_provider_response = self._parse_provider_response(response_json.get("provider_response"))
-
-        # Try to extract from provider response first (more detailed)
-        provider_error_msg = self._format_provider_error(parsed_provider_response, top_level_error)
+        provider_error_msg = self._format_provider_error(parsed_provider_response)
         if provider_error_msg:
             return provider_error_msg
 
-        # Fall back to top-level error
+        top_level_error = response_json.get("error")
         if top_level_error:
             return self._format_top_level_error(top_level_error)
 
-        # Check for status-based errors
         status = response_json.get("status")
-
-        # Handle moderation specifically
         if status in [STATUS_REQUEST_MODERATED, STATUS_CONTENT_MODERATED]:
             return self._format_moderation_error(response_json)
-
-        # Handle other failure statuses
         if status in [STATUS_FAILED, STATUS_ERROR]:
-            return self._format_failure_status_error(response_json, status)
+            return self._format_failure_status_error(response_json)
 
-        # Final fallback
-        return f"Generation failed.\n\nFull API response:\n{response_json}"
+        return super()._extract_error_message(response_json)
 
     def _format_moderation_error(self, response_json: dict[str, Any]) -> str:
         """Format error message for moderated content."""
@@ -358,15 +298,15 @@ class QwenImageGeneration(GriptapeProxyNode):
         moderation_reasons = details.get("Moderation Reasons", [])
         if moderation_reasons:
             reasons_str = ", ".join(moderation_reasons)
-            return f"Content was moderated and blocked.\nModeration Reasons: {reasons_str}"
-        return "Content was moderated and blocked by safety filters."
+            return f"Content was moderated and blocked. Moderation reasons: {reasons_str}"
+        return "Content was moderated and blocked by safety filters"
 
-    def _format_failure_status_error(self, response_json: dict[str, Any], status: str) -> str:
-        """Format error message for failed/error status."""
+    def _format_failure_status_error(self, response_json: dict[str, Any]) -> str:
+        """The error reported in the result of a failed request, or "" if there is none."""
         result = response_json.get("result", {})
         if isinstance(result, dict) and result.get("error"):
-            return f"Generation failed: {result['error']}"
-        return f"Generation failed with status '{status}'."
+            return str(result["error"])
+        return ""
 
     def _parse_provider_response(self, provider_response: Any) -> dict[str, Any] | None:
         """Parse provider_response if it's a JSON string."""
@@ -379,40 +319,24 @@ class QwenImageGeneration(GriptapeProxyNode):
             return provider_response
         return None
 
-    def _format_provider_error(
-        self, parsed_provider_response: dict[str, Any] | None, top_level_error: Any
-    ) -> str | None:
-        """Format error message from parsed provider response."""
+    def _format_provider_error(self, parsed_provider_response: dict[str, Any] | None) -> str:
+        """The provider's own error message from its parsed response, or "" if there is none."""
         if not parsed_provider_response:
-            return None
+            return ""
 
         provider_error = parsed_provider_response.get("error")
         if not provider_error:
-            return None
+            return ""
 
         if isinstance(provider_error, dict):
-            error_message = provider_error.get("message", "")
-            details = f"{error_message}"
-
-            if error_code := provider_error.get("code"):
-                details += f"\nError Code: {error_code}"
-            if error_type := provider_error.get("type"):
-                details += f"\nError Type: {error_type}"
-            if top_level_error:
-                details = f"{top_level_error}\n\n{details}"
-            return details
-
-        error_msg = str(provider_error)
-        if top_level_error:
-            return f"{top_level_error}\n\nProvider error: {error_msg}"
-        return f"Generation failed. Provider error: {error_msg}"
+            return str(provider_error.get("message") or "")
+        return str(provider_error)
 
     def _format_top_level_error(self, top_level_error: Any) -> str:
-        """Format error message from top-level error field."""
+        """The message from the top-level error field, or "" if it has none."""
         if isinstance(top_level_error, dict):
-            error_msg = top_level_error.get("message") or top_level_error.get("error") or str(top_level_error)
-            return f"Generation failed with error: {error_msg}\n\nFull error details:\n{top_level_error}"
-        return f"Generation failed with error: {top_level_error!s}"
+            return str(top_level_error.get("message") or top_level_error.get("error") or "")
+        return str(top_level_error)
 
     def _set_safe_defaults(self) -> None:
         """Set safe default values for outputs."""

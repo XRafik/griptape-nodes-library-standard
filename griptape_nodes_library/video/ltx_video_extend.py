@@ -16,7 +16,7 @@ from griptape_nodes.traits.options import Options
 from griptape_nodes.traits.slider import Slider
 
 from griptape_nodes_library.media import prepare_media_data_uri
-from griptape_nodes_library.proxy import GriptapeProxyNode
+from griptape_nodes_library.proxy import ArtifactKind, GriptapeProxyNode
 from griptape_nodes_library.video.public_video_url_mixin import PublicVideoUrlMixin
 
 logger = logging.getLogger("griptape_nodes")
@@ -227,28 +227,22 @@ class LTXVideoExtend(PublicVideoUrlMixin, GriptapeProxyNode):
         try:
             await super()._process_generation()
         finally:
-            self._cleanup_video_uploads()
+            await self._cleanup_video_uploads()
 
     def _validate_duration(self, duration: Any) -> str | None:
         if not isinstance(duration, int) or isinstance(duration, bool):
-            return f"{self.name}: Duration must be an integer number of seconds (got {duration!r})."
+            return f"Duration must be an integer number of seconds (got {duration!r})."
         if duration < MIN_EXTEND_DURATION or duration > MAX_EXTEND_DURATION:
-            return (
-                f"{self.name}: Duration must be between {MIN_EXTEND_DURATION} and "
-                f"{MAX_EXTEND_DURATION} seconds (got {duration})."
-            )
+            return f"Duration must be between {MIN_EXTEND_DURATION} and {MAX_EXTEND_DURATION} seconds (got {duration})."
         return None
 
     def _validate_context(self, context: Any) -> str | None:
         if context is None:
             return None
         if not isinstance(context, int) or isinstance(context, bool):
-            return f"{self.name}: Context must be an integer number of seconds (got {context!r})."
+            return f"Context must be an integer number of seconds (got {context!r})."
         if context < MIN_CONTEXT_DURATION or context > MAX_CONTEXT_DURATION:
-            return (
-                f"{self.name}: Context must be between {MIN_CONTEXT_DURATION} and "
-                f"{MAX_CONTEXT_DURATION} seconds (got {context})."
-            )
+            return f"Context must be between {MIN_CONTEXT_DURATION} and {MAX_CONTEXT_DURATION} seconds (got {context})."
         return None
 
     async def _build_payload(self) -> dict[str, Any]:
@@ -256,7 +250,7 @@ class LTXVideoExtend(PublicVideoUrlMixin, GriptapeProxyNode):
 
         video = self.get_parameter_value("video")
         if not video:
-            msg = f"{self.name} requires an input video to extend."
+            msg = "Connect a video to 'input video' to extend."
             raise ValueError(msg)
 
         # Tier 1: upload to Griptape Cloud and send LTX a public URL it fetches server-side
@@ -265,8 +259,8 @@ class LTXVideoExtend(PublicVideoUrlMixin, GriptapeProxyNode):
 
         if len(params["prompt"]) > MAX_PROMPT_LENGTH:
             msg = (
-                f"{self.name}: Prompt exceeds {MAX_PROMPT_LENGTH} characters limit "
-                f"(current: {len(params['prompt'])} characters)"
+                f"'Prompt' is longer than the {MAX_PROMPT_LENGTH} character limit "
+                f"({len(params['prompt'])} characters). Shorten it and try again."
             )
             raise ValueError(msg)
 
@@ -294,46 +288,20 @@ class LTXVideoExtend(PublicVideoUrlMixin, GriptapeProxyNode):
 
         return payload
 
-    async def _parse_result(self, result_json: dict[str, Any], generation_id: str) -> None:
-        video_bytes = result_json.get("raw_bytes")
-        if not isinstance(video_bytes, (bytes, bytearray)):
-            msg = f"{self.name} generation completed but no video data received."
-            raise TypeError(msg)
+    async def _parse_result(self, _result_json: dict[str, Any], generation_id: str) -> None:
+        """Save the hosted video. LTX returns the media as the response body itself."""
+        await self._save_generated_media(
+            generation_id,
+            "video_url",
+            lambda v, n: VideoUrlArtifact(value=v, name=n),
+            kind=ArtifactKind.VIDEO,
+            action="extended",
+        )
 
-        await self._handle_completion_async(bytes(video_bytes), generation_id)
-
-    async def _handle_completion_async(self, video_bytes: bytes, generation_id: str) -> None:
-        """Handle successful completion by saving the video to static storage."""
-        if not video_bytes:
-            self.parameter_output_values["video_url"] = None
-            self._set_status_results(
-                was_successful=False,
-                result_details=f"{self.name} generation completed but no video data received.",
-            )
-            return
-
-        try:
-            dest = self._output_file.build_file()
-            saved = await dest.awrite_bytes(video_bytes)
-            self.parameter_output_values["video_url"] = VideoUrlArtifact(value=saved.location, name=saved.name)
-            logger.info("%s saved video as %s", self.name, saved.name)
-            self._set_status_results(
-                was_successful=True,
-                result_details=f"Video extension successful and saved as {saved.name}.",
-            )
-        except (OSError, PermissionError) as e:
-            logger.error("%s failed to save to static storage: %s", self.name, e)
-            self.parameter_output_values["video_url"] = None
-            self._set_status_results(
-                was_successful=False,
-                result_details=f"Video generated but failed to save to storage: {e}",
-            )
-
-    def _extract_error_message(self, response_json: dict[str, Any]) -> str:  # noqa: C901, PLR0912
+    def _extract_error_message(self, response_json: dict[str, Any]) -> str:
         if not response_json:
-            return f"{self.name} generation failed with no error details provided by API."
+            return ""
 
-        status = str(response_json.get("status") or "").lower()
         status_detail = response_json.get("status_detail")
         if isinstance(status_detail, dict):
             error = status_detail.get("error", "")
@@ -352,30 +320,22 @@ class LTXVideoExtend(PublicVideoUrlMixin, GriptapeProxyNode):
                     pass
 
             if error and details:
-                message = f"{error}: {details}"
-            elif error:
-                message = error
-            elif details:
-                message = details
-            else:
-                message = f"Generation {status or 'failed'} with no details provided"
-
-            return f"{self.name} generation {status or 'failed'}: {message}"
+                return f"{error}: {details}"
+            return str(error or details or "")
 
         error = response_json.get("error")
-        if error:
-            if isinstance(error, dict):
-                message = error.get("message") or error.get("type") or str(error)
-                return f"{self.name} request failed: {message}"
-            if isinstance(error, str):
-                return f"{self.name} request failed: {error}"
+        if isinstance(error, dict):
+            return str(error.get("message") or error.get("type") or "")
+        if isinstance(error, str):
+            return error
 
-        return f"{self.name} generation failed.\n\nFull API response:\n{response_json}"
+        return ""
 
     def _handle_payload_build_error(self, e: Exception) -> None:
         if isinstance(e, ValueError):
             self._set_safe_defaults()
             self._set_status_results(was_successful=False, result_details=str(e))
+            self._handle_failure_exception(e)
             return
 
         super()._handle_payload_build_error(e)

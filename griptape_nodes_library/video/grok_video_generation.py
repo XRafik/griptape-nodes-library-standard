@@ -15,7 +15,7 @@ from griptape_nodes.exe_types.param_types.parameter_video import ParameterVideo
 from griptape_nodes.files.file import File, FileLoadError
 from griptape_nodes.traits.options import Options
 
-from griptape_nodes_library.proxy import GriptapeProxyNode
+from griptape_nodes_library.proxy import ArtifactKind, GriptapeProxyNode
 
 logger = logging.getLogger("griptape_nodes")
 
@@ -223,14 +223,12 @@ class GrokVideoGeneration(GriptapeProxyNode):
 
         prompt = (self.get_parameter_value("prompt") or "").strip()
         if not prompt:
-            exceptions.append(ValueError(f"{self.name}: Prompt is required for video generation."))
+            exceptions.append(ValueError("A prompt is required for video generation. Enter one in 'prompt'."))
 
         duration = self.get_parameter_value("duration")
         if duration is None or not self.MIN_DURATION <= int(duration) <= self.MAX_DURATION:
             exceptions.append(
-                ValueError(
-                    f"{self.name}: duration must be between {self.MIN_DURATION} and {self.MAX_DURATION} seconds."
-                )
+                ValueError(f"'duration' must be between {self.MIN_DURATION} and {self.MAX_DURATION} seconds.")
             )
 
         return exceptions if exceptions else None
@@ -256,19 +254,13 @@ class GrokVideoGeneration(GriptapeProxyNode):
 
         return payload
 
-    async def _parse_result(self, result_json: dict[str, Any], generation_id: str) -> None:
-        video_info = result_json.get("video") or {}
-        video_url = video_info.get("url")
-
-        if not video_url:
-            self._set_safe_defaults()
-            self._set_status_results(
-                was_successful=False,
-                result_details=f"{self.name} generation completed but no video URL was found in the response.",
-            )
-            return
-
-        await self._download_and_save(video_url, "video_url", lambda v, n: VideoUrlArtifact(value=v, name=n))
+    async def _parse_result(self, _result_json: dict[str, Any], generation_id: str) -> None:
+        await self._save_generated_media(
+            generation_id,
+            "video_url",
+            lambda v, n: VideoUrlArtifact(value=v, name=n),
+            kind=ArtifactKind.VIDEO,
+        )
 
     def _set_safe_defaults(self) -> None:
         self.parameter_output_values["video_url"] = None

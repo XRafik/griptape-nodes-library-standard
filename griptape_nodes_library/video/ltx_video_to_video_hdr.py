@@ -11,12 +11,13 @@ from griptape_nodes.exe_types.param_components.project_file_parameter import Pro
 from griptape_nodes.exe_types.param_types.parameter_dict import ParameterDict
 from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
 from griptape_nodes.exe_types.param_types.parameter_video import ParameterVideo
+from griptape_nodes.files.file import FileLoadError
 
 # static_ffmpeg is dynamically installed by the library loader at runtime
 from static_ffmpeg import run  # type: ignore[import-untyped]
 
-from griptape_nodes_library.media import coerce_media_url_or_data_uri, prepare_media_data_uri
-from griptape_nodes_library.proxy import GriptapeProxyNode
+from griptape_nodes_library.media import coerce_media_url_or_data_uri, prepare_media_data_uri, resolve_media_location
+from griptape_nodes_library.proxy import ArtifactKind, GriptapeProxyNode
 from griptape_nodes_library.utils.ffmpeg_utils import describe_ffmpeg_failure
 
 logger = logging.getLogger("griptape_nodes")
@@ -137,6 +138,9 @@ class LTXVideoToVideoHDR(GriptapeProxyNode):
         try:
             _, ffprobe_path = run.get_or_fetch_platform_executables_else_raise()
 
+            # Project-saved inputs carry macro paths like {outputs}/clip.mp4 that ffprobe can't open
+            location = resolve_media_location(video_url)
+
             cmd = [
                 ffprobe_path,
                 # "error" rather than "quiet" so the log below can report why the probe
@@ -149,7 +153,7 @@ class LTXVideoToVideoHDR(GriptapeProxyNode):
                 "-count_frames",
                 "-select_streams",
                 "v:0",
-                video_url,
+                location,
             ]
 
             result = subprocess.run(  # noqa: S603
@@ -177,6 +181,7 @@ class LTXVideoToVideoHDR(GriptapeProxyNode):
             subprocess.TimeoutExpired,
             subprocess.CalledProcessError,
             json.JSONDecodeError,
+            FileLoadError,
             ValueError,
             KeyError,
         ) as e:
@@ -199,7 +204,7 @@ class LTXVideoToVideoHDR(GriptapeProxyNode):
     def _validate_video_input(self, video: Any) -> str | None:
         """Validate video is provided and fits within LTX HDR input frame-count limits."""
         if not video:
-            return f"{self.name} requires an input video for HDR upscale."
+            return "Connect a video to 'input video' to upscale."
 
         video_url = self._extract_input_video_url(video)
         if not video_url:
@@ -214,14 +219,14 @@ class LTXVideoToVideoHDR(GriptapeProxyNode):
         tier = self._pick_input_tier(width, height)
         if tier is None:
             return (
-                f"{self.name}: Input video resolution ({width}x{height}) exceeds the "
-                f"maximum supported LTX HDR upscale input (up to 4K)."
+                f"The input video is {width}x{height}, larger than LTX HDR upscale accepts (up to 4K). "
+                "Resize it and try again."
             )
 
         bucket, max_frames = tier
         if frames > 0 and frames > max_frames:
             return (
-                f"{self.name}: Input video has {frames} frames at {width}x{height} "
+                f"The input video has {frames} frames at {width}x{height} "
                 f"({bucket} tier), which exceeds the LTX HDR upscale limit of "
                 f"{max_frames} frames for this resolution."
             )
@@ -241,56 +246,31 @@ class LTXVideoToVideoHDR(GriptapeProxyNode):
             video_data_uri = await self._prepare_video_data_uri_async(video)
         except Exception as e:
             logger.error("%s failed to process video: %s", self.name, e)
-            video_data_uri = None
+            msg = f"Could not read the video connected to 'input video': {e}"
+            raise ValueError(msg) from e
 
         if not video_data_uri:
-            msg = f"{self.name} failed to process input video."
+            msg = "Could not read the video connected to 'input video'."
             raise ValueError(msg)
 
         # The proxy derives duration AND the billing resolution tier server-side
         # from the decoded video, so the request payload only carries video_uri.
         return {"video_uri": video_data_uri}
 
-    async def _parse_result(self, result_json: dict[str, Any], generation_id: str) -> None:
-        zip_bytes = result_json.get("raw_bytes")
-        if not isinstance(zip_bytes, (bytes, bytearray)):
-            msg = f"{self.name} generation completed but no ZIP data received."
-            raise TypeError(msg)
+    async def _parse_result(self, _result_json: dict[str, Any], generation_id: str) -> None:
+        """Save the hosted EXR-frames ZIP. LTX HDR returns the archive as the response body itself."""
+        await self._save_generated_media(
+            generation_id,
+            "project_path",
+            lambda v, _n: v,
+            kind=ArtifactKind.ARCHIVE,
+            media_kind="archive",
+        )
 
-        await self._handle_completion_async(bytes(zip_bytes), generation_id)
-
-    async def _handle_completion_async(self, zip_bytes: bytes, generation_id: str) -> None:
-        """Save the EXR-frames ZIP to storage and surface its path."""
-        if not zip_bytes:
-            self._set_safe_defaults()
-            self._set_status_results(
-                was_successful=False,
-                result_details=f"{self.name} generation completed but no ZIP data received.",
-            )
-            return
-
-        try:
-            dest = self._output_file.build_file()
-            saved = await dest.awrite_bytes(zip_bytes)
-            self.parameter_output_values["project_path"] = saved.location
-            logger.info("%s saved EXR-frames ZIP as %s", self.name, saved.name)
-            self._set_status_results(
-                was_successful=True,
-                result_details=f"HDR upscale successful. EXR frames ZIP saved as {saved.name}.",
-            )
-        except (OSError, PermissionError) as e:
-            logger.error("%s failed to save ZIP to storage: %s", self.name, e)
-            self._set_safe_defaults()
-            self._set_status_results(
-                was_successful=False,
-                result_details=f"HDR upscale completed but failed to save ZIP to storage: {e}",
-            )
-
-    def _extract_error_message(self, response_json: dict[str, Any]) -> str:  # noqa: C901, PLR0912
+    def _extract_error_message(self, response_json: dict[str, Any]) -> str:
         if not response_json:
-            return f"{self.name} generation failed with no error details provided by API."
+            return ""
 
-        status = str(response_json.get("status") or "").lower()
         status_detail = response_json.get("status_detail")
         if isinstance(status_detail, dict):
             error = status_detail.get("error", "")
@@ -309,38 +289,25 @@ class LTXVideoToVideoHDR(GriptapeProxyNode):
                     pass
 
             if error and details:
-                message = f"{error}: {details}"
-            elif error:
-                message = error
-            elif details:
-                message = details
-            else:
-                message = f"Generation {status or 'failed'} with no details provided"
-
-            return f"{self.name} generation {status or 'failed'}: {message}"
+                return f"{error}: {details}"
+            return str(error or details or "")
 
         error = response_json.get("error")
-        if error:
-            if isinstance(error, dict):
-                message = error.get("message") or error.get("type") or str(error)
-                return f"{self.name} request failed: {message}"
-            if isinstance(error, str):
-                return f"{self.name} request failed: {error}"
+        if isinstance(error, dict):
+            return str(error.get("message") or error.get("type") or "")
+        if isinstance(error, str):
+            return error
 
-        return f"{self.name} generation failed.\n\nFull API response:\n{response_json}"
+        return ""
 
     def _handle_payload_build_error(self, e: Exception) -> None:
         if isinstance(e, ValueError):
             self._set_safe_defaults()
             self._set_status_results(was_successful=False, result_details=str(e))
+            self._handle_failure_exception(e)
             return
 
         super()._handle_payload_build_error(e)
-
-    def _handle_api_key_validation_error(self, e: ValueError) -> None:
-        self._set_safe_defaults()
-        self._set_status_results(was_successful=False, result_details=str(e))
-        logger.error("%s API key validation failed: %s", self.name, e)
 
     def _set_safe_defaults(self) -> None:
         self.parameter_output_values["generation_id"] = ""

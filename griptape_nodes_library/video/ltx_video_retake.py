@@ -13,13 +13,14 @@ from griptape_nodes.exe_types.param_types.parameter_dict import ParameterDict
 from griptape_nodes.exe_types.param_types.parameter_range import ParameterRange
 from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
 from griptape_nodes.exe_types.param_types.parameter_video import ParameterVideo
+from griptape_nodes.files.file import FileLoadError
 from griptape_nodes.traits.options import Options
 
 # static_ffmpeg is dynamically installed by the library loader at runtime
 from static_ffmpeg import run  # type: ignore[import-untyped]
 
-from griptape_nodes_library.media import coerce_media_url_or_data_uri, prepare_media_data_uri
-from griptape_nodes_library.proxy import GriptapeProxyNode
+from griptape_nodes_library.media import coerce_media_url_or_data_uri, prepare_media_data_uri, resolve_media_location
+from griptape_nodes_library.proxy import ArtifactKind, GriptapeProxyNode
 from griptape_nodes_library.utils.ffmpeg_utils import describe_ffmpeg_failure
 from griptape_nodes_library.video.public_video_url_mixin import PublicVideoUrlMixin
 
@@ -31,23 +32,48 @@ MAX_VIDEO_DURATION = 21
 MIN_RETAKE_DURATION = 2.0
 RETAKE_SEGMENT_LENGTH = 2
 
-# Retake is only offered on ltx-2-3-pro: the provider retired ltx-2-pro and now
-# rejects it with "Invalid input for 'model': Invalid model".
 DEFAULT_MODEL = "ltx-2-3-pro"
 
-# Migrates values saved before the dropdown stored the provider's own model id: old
-# display labels and catalog keys. `ltx-2-pro` and its label migrate here too now
-# that the provider no longer serves it.
+# Migrates values saved before the dropdown stored the provider's own model id (old
+# display labels and catalog keys), plus ltx-2-pro, which LTX removed from the retake
+# endpoint. Retake is offered on ltx-2-3-pro only:
+# https://docs.ltx.io/pricing
 LEGACY_MODEL_VALUES = {
-    "LTX 2 Pro": DEFAULT_MODEL,
-    "LTX 2.3 Pro": DEFAULT_MODEL,
-    "gtc_ltx_2_3_pro": DEFAULT_MODEL,
-    "gtc_ltx_2_pro": DEFAULT_MODEL,
-    "ltx-2-pro": DEFAULT_MODEL,
+    "LTX 2 Pro": "ltx-2-3-pro",
+    "LTX 2.3 Pro": "ltx-2-3-pro",
+    "gtc_ltx_2_3_pro": "ltx-2-3-pro",
+    "gtc_ltx_2_pro": "ltx-2-3-pro",
+    "ltx-2-pro": "ltx-2-3-pro",
 }
 
-SUPPORTED_RESOLUTIONS = ("1920x1080", "2560x1440", "3840x2160")
+# The retake endpoint accepts 1080p in either orientation and nothing else; a request
+# naming any other resolution is rejected before generation starts. Landscape leads so
+# that `Options` snaps a resolution saved from a wider list back to a value the endpoint
+# takes, rather than carrying it through to a failed generation.
+SUPPORTED_RESOLUTIONS = ("1920x1080", "1080x1920")
 DEFAULT_RESOLUTION = "1920x1080"
+PORTRAIT_RESOLUTION = "1080x1920"
+
+# A rotation this far from a quarter turn counts as one, covering the float noise a
+# display matrix can carry.
+_ROTATION_TOLERANCE_DEGREES = 45
+
+
+def _is_quarter_turned(video_stream: dict[str, Any]) -> bool:
+    """Whether a display matrix rotates the stream onto its side.
+
+    Phone footage is commonly stored landscape with a 90 or 270 degree rotation that
+    players apply, so the stored `width`/`height` describe a portrait video the wrong
+    way round. Only quarter turns swap the two; 180 leaves the orientation alone.
+    """
+    for side_data in video_stream.get("side_data_list") or []:
+        rotation = side_data.get("rotation")
+        if not isinstance(rotation, (int, float)):
+            continue
+        offset_from_quarter_turn = abs(rotation) % 180
+        if abs(offset_from_quarter_turn - 90) < _ROTATION_TOLERANCE_DEGREES:
+            return True
+    return False
 
 
 class LTXVideoRetake(PublicVideoUrlMixin, GriptapeProxyNode):
@@ -57,7 +83,7 @@ class LTXVideoRetake(PublicVideoUrlMixin, GriptapeProxyNode):
         - video (VideoUrlArtifact): Input video to edit (required, max 21s, max resolution 3840x2160, sent as base64)
         - retake_segment (list[float]): Time range [start, end] in seconds to regenerate
         - prompt (str): Text describing what should happen in the retake segment (max 5000 chars)
-        - resolution (str): Output resolution (1920x1080, 2560x1440, or 3840x2160); auto-detected from input video
+        - resolution (str): Output resolution (1920x1080 or 1080x1920); auto-detected from input video
         - mode (str): What to replace - audio only, video only, or both (default: both)
         - model (str): Model to use (LTX 2.3 Pro)
         (Always polls for result: 5s interval, 20 min timeout)
@@ -79,7 +105,7 @@ class LTXVideoRetake(PublicVideoUrlMixin, GriptapeProxyNode):
 
         # INPUTS / PROPERTIES
 
-        # Model parameter — retake is only offered on ltx-2-3-pro per the pricing page.
+        # Model parameter (retake is offered on ltx-2-3-pro only)
         model_param = ParameterString(
             name="model",
             default_value=DEFAULT_MODEL,
@@ -120,12 +146,15 @@ class LTXVideoRetake(PublicVideoUrlMixin, GriptapeProxyNode):
         )
 
         # Resolution parameter (required by the LTX retake API).
-        # Auto-populated from the connected video when possible.
+        # Auto-populated from the connected video's orientation when possible.
         self.add_parameter(
             ParameterString(
                 name="resolution",
                 default_value=DEFAULT_RESOLUTION,
-                tooltip="Output video resolution. Auto-detected from the input video when possible.",
+                tooltip=(
+                    "Output video resolution. Retake renders at 1080p; the orientation is "
+                    "auto-detected from the input video when possible."
+                ),
                 allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
                 traits={Options(choices=list(SUPPORTED_RESOLUTIONS))},
             )
@@ -300,6 +329,9 @@ class LTXVideoRetake(PublicVideoUrlMixin, GriptapeProxyNode):
         try:
             _, ffprobe_path = run.get_or_fetch_platform_executables_else_raise()
 
+            # Project-saved inputs carry macro paths like {outputs}/clip.mp4 that ffprobe can't open
+            location = resolve_media_location(video_url)
+
             cmd = [
                 ffprobe_path,
                 # "error" rather than "quiet" so the log below can report why the probe
@@ -311,7 +343,7 @@ class LTXVideoRetake(PublicVideoUrlMixin, GriptapeProxyNode):
                 "-show_streams",
                 "-select_streams",
                 "v:0",  # Only first video stream
-                video_url,
+                location,
             ]
 
             result = subprocess.run(  # noqa: S603
@@ -334,6 +366,8 @@ class LTXVideoRetake(PublicVideoUrlMixin, GriptapeProxyNode):
             width = video_stream.get("width")
             height = video_stream.get("height")
             if isinstance(width, int) and isinstance(height, int):
+                if _is_quarter_turned(video_stream):
+                    width, height = height, width
                 info["width"] = width
                 info["height"] = height
             return info or None
@@ -342,6 +376,7 @@ class LTXVideoRetake(PublicVideoUrlMixin, GriptapeProxyNode):
             subprocess.TimeoutExpired,
             subprocess.CalledProcessError,
             json.JSONDecodeError,
+            FileLoadError,
             ValueError,
             KeyError,
         ) as e:
@@ -350,29 +385,20 @@ class LTXVideoRetake(PublicVideoUrlMixin, GriptapeProxyNode):
 
     @staticmethod
     def _snap_to_supported_resolution(width: int, height: int) -> str:
-        """Pick the closest supported resolution by total pixel count.
+        """Pick the supported resolution matching the video's orientation.
 
-        The API only accepts the fixed set ``SUPPORTED_RESOLUTIONS``, so we
-        match on pixel-area proximity. Orientation is preserved by the API
-        internally; we always report ``WIDTHxHEIGHT`` from the supported list.
+        1080p is the only size the endpoint accepts, so orientation is the whole
+        choice: a taller-than-wide video retakes at ``1080x1920`` and everything
+        else at ``1920x1080``. Square sources take the landscape default.
         """
-        target_pixels = max(width, 1) * max(height, 1)
-
-        def _pixels(res: str) -> int:
-            w, _, h = res.partition("x")
-            try:
-                return int(w) * int(h)
-            except ValueError:
-                return 0
-
-        return min(SUPPORTED_RESOLUTIONS, key=lambda r: abs(_pixels(r) - target_pixels))
+        return PORTRAIT_RESOLUTION if height > width else DEFAULT_RESOLUTION
 
     async def _process_generation(self) -> None:
         self._reset_video_uploads()
         try:
             await super()._process_generation()
         finally:
-            self._cleanup_video_uploads()
+            await self._cleanup_video_uploads()
 
     def _get_parameters(self) -> dict[str, Any]:
         return {
@@ -389,7 +415,7 @@ class LTXVideoRetake(PublicVideoUrlMixin, GriptapeProxyNode):
     def _validate_video_input(self, video: Any) -> str | None:
         """Validate video is provided and doesn't exceed duration limits."""
         if not video:
-            return f"{self.name} requires an input video for retake generation."
+            return "Connect a video to 'input video' to retake."
 
         video_url = self._extract_input_video_url(video)
         if not video_url:
@@ -398,8 +424,7 @@ class LTXVideoRetake(PublicVideoUrlMixin, GriptapeProxyNode):
         duration = self._get_video_duration(video_url)
         if duration and duration > MAX_VIDEO_DURATION:
             return (
-                f"{self.name}: Input video duration ({duration:.1f}s) exceeds maximum allowed "
-                f"duration of {MAX_VIDEO_DURATION}s"
+                f"The input video is {duration:.1f}s long, over the {MAX_VIDEO_DURATION}s limit. Trim it and try again."
             )
 
         return None
@@ -414,26 +439,26 @@ class LTXVideoRetake(PublicVideoUrlMixin, GriptapeProxyNode):
             or not isinstance(segment[0], (int, float))
             or not isinstance(segment[1], (int, float))
         ):
-            return f"{self.name}: Retake segment must be a list with two numeric values [start, end]"
+            return "'retake_segment' must be a list of two numbers: [start, end]."
 
         start_time, end_time = segment
 
         # Validate time bounds - check start negative or end exceeds max
         if start_time < 0 or end_time > MAX_VIDEO_DURATION:
             if start_time < 0:
-                return f"{self.name}: Start time cannot be negative (got {start_time}s)"
-            return f"{self.name}: End time cannot exceed {MAX_VIDEO_DURATION}s (got {end_time}s)"
+                return f"The retake start time cannot be negative (got {start_time}s)."
+            return f"The retake end time cannot be later than {MAX_VIDEO_DURATION}s (got {end_time}s)."
 
         # Validate time ordering
         if start_time >= end_time:
-            return f"{self.name}: Start time must be before end time (got {segment})"
+            return f"The retake start time must be before the end time (got {segment})."
 
         # Validate duration
         duration = end_time - start_time
         if duration < MIN_RETAKE_DURATION:
             return (
-                f"{self.name}: Retake segment must be at least {MIN_RETAKE_DURATION}s "
-                f"(got {duration}s from segment {segment})"
+                f"The retake segment must be at least {MIN_RETAKE_DURATION}s long "
+                f"(got {duration}s from segment {segment})."
             )
 
         return None
@@ -460,8 +485,8 @@ class LTXVideoRetake(PublicVideoUrlMixin, GriptapeProxyNode):
 
         if len(params["prompt"]) > MAX_PROMPT_LENGTH:
             msg = (
-                f"{self.name}: Prompt exceeds {MAX_PROMPT_LENGTH} characters limit "
-                f"(current: {len(params['prompt'])} characters)"
+                f"'Prompt' is longer than the {MAX_PROMPT_LENGTH} character limit "
+                f"({len(params['prompt'])} characters). Shorten it and try again."
             )
             raise ValueError(msg)
 
@@ -473,10 +498,7 @@ class LTXVideoRetake(PublicVideoUrlMixin, GriptapeProxyNode):
 
         resolution = params["resolution"]
         if resolution not in SUPPORTED_RESOLUTIONS:
-            msg = (
-                f"{self.name}: Unsupported resolution '{resolution}'. "
-                f"Valid resolutions: {', '.join(SUPPORTED_RESOLUTIONS)}"
-            )
+            msg = f"Unsupported resolution '{resolution}'. Valid resolutions: {', '.join(SUPPORTED_RESOLUTIONS)}."
             raise ValueError(msg)
 
         payload: dict[str, Any] = {
@@ -491,50 +513,20 @@ class LTXVideoRetake(PublicVideoUrlMixin, GriptapeProxyNode):
 
         return payload
 
-    async def _parse_result(self, result_json: dict[str, Any], generation_id: str) -> None:
-        video_bytes = result_json.get("raw_bytes")
-        if not isinstance(video_bytes, (bytes, bytearray)):
-            msg = f"{self.name} generation completed but no video data received."
-            raise TypeError(msg)
+    async def _parse_result(self, _result_json: dict[str, Any], generation_id: str) -> None:
+        """Save the hosted video. LTX returns the media as the response body itself."""
+        await self._save_generated_media(
+            generation_id,
+            "video_url",
+            lambda v, n: VideoUrlArtifact(value=v, name=n),
+            kind=ArtifactKind.VIDEO,
+            action="retaken",
+        )
 
-        await self._handle_completion_async(bytes(video_bytes), generation_id)
-
-    async def _handle_completion_async(self, video_bytes: bytes, generation_id: str) -> None:
-        """Handle successful completion by saving the video to static storage.
-
-        Args:
-            video_bytes: Raw binary MP4 data received from /result endpoint
-            generation_id: Generation ID for filename
-        """
-        if not video_bytes:
-            self.parameter_output_values["video_url"] = None
-            self._set_status_results(
-                was_successful=False,
-                result_details=f"{self.name} generation completed but no video data received.",
-            )
-            return
-
-        try:
-            dest = self._output_file.build_file()
-            saved = await dest.awrite_bytes(video_bytes)
-            self.parameter_output_values["video_url"] = VideoUrlArtifact(value=saved.location, name=saved.name)
-            logger.info("%s saved video as %s", self.name, saved.name)
-            self._set_status_results(
-                was_successful=True, result_details=f"Video retake successful and saved as {saved.name}."
-            )
-        except (OSError, PermissionError) as e:
-            logger.error("%s failed to save to static storage: %s", self.name, e)
-            self.parameter_output_values["video_url"] = None
-            self._set_status_results(
-                was_successful=False,
-                result_details=f"Video generated but failed to save to storage: {e}",
-            )
-
-    def _extract_error_message(self, response_json: dict[str, Any]) -> str:  # noqa: C901, PLR0912
+    def _extract_error_message(self, response_json: dict[str, Any]) -> str:
         if not response_json:
-            return f"{self.name} generation failed with no error details provided by API."
+            return ""
 
-        status = str(response_json.get("status") or "").lower()
         status_detail = response_json.get("status_detail")
         if isinstance(status_detail, dict):
             error = status_detail.get("error", "")
@@ -553,30 +545,22 @@ class LTXVideoRetake(PublicVideoUrlMixin, GriptapeProxyNode):
                     pass
 
             if error and details:
-                message = f"{error}: {details}"
-            elif error:
-                message = error
-            elif details:
-                message = details
-            else:
-                message = f"Generation {status or 'failed'} with no details provided"
-
-            return f"{self.name} generation {status or 'failed'}: {message}"
+                return f"{error}: {details}"
+            return str(error or details or "")
 
         error = response_json.get("error")
-        if error:
-            if isinstance(error, dict):
-                message = error.get("message") or error.get("type") or str(error)
-                return f"{self.name} request failed: {message}"
-            if isinstance(error, str):
-                return f"{self.name} request failed: {error}"
+        if isinstance(error, dict):
+            return str(error.get("message") or error.get("type") or "")
+        if isinstance(error, str):
+            return error
 
-        return f"{self.name} generation failed.\n\nFull API response:\n{response_json}"
+        return ""
 
     def _handle_payload_build_error(self, e: Exception) -> None:
         if isinstance(e, ValueError):
             self._set_safe_defaults()
             self._set_status_results(was_successful=False, result_details=str(e))
+            self._handle_failure_exception(e)
             return
 
         super()._handle_payload_build_error(e)

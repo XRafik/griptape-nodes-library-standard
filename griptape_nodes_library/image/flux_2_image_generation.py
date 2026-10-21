@@ -21,7 +21,7 @@ from griptape_nodes.files.file import File, FileLoadError
 from griptape_nodes.traits.options import Options
 from griptape_nodes.utils.artifact_normalization import normalize_artifact_list
 
-from griptape_nodes_library.proxy import GriptapeProxyNode
+from griptape_nodes_library.proxy import ArtifactKind, GriptapeProxyNode
 
 logger = logging.getLogger("griptape_nodes")
 
@@ -311,7 +311,7 @@ class Flux2ImageGeneration(GriptapeProxyNode):
             ValueError: If value is None or not one of the expected options
         """
         if not value:
-            msg = "safety_tolerance cannot be None or empty"
+            msg = "Pick a 'Safety Tolerance' value."
             raise ValueError(msg)
 
         if value == "most restrictive":
@@ -321,7 +321,7 @@ class Flux2ImageGeneration(GriptapeProxyNode):
         if value == "least restrictive":
             return 5
 
-        msg = f"Invalid safety_tolerance value: '{value}'. Must be one of: {SAFETY_TOLERANCE_OPTIONS}"
+        msg = f"Invalid 'Safety Tolerance' value: '{value}'. Must be one of: {SAFETY_TOLERANCE_OPTIONS}"
         raise ValueError(msg)
 
     def _round_to_nearest_multiple_of_16(self, value: int) -> int:
@@ -409,50 +409,20 @@ class Flux2ImageGeneration(GriptapeProxyNode):
 
         return payload
 
-    async def _parse_result(self, result_json: dict[str, Any], generation_id: str) -> None:
-        """Parse the Flux result and set output parameters.
+    async def _parse_result(self, _result_json: dict[str, Any], generation_id: str) -> None:
+        """Save the hosted image.
 
         Args:
-            result_json: The JSON response from the /result endpoint
+            _result_json: The JSON response from the /result endpoint
             generation_id: The generation ID for this request
         """
-        # Extract image URL from BFL response format (result.sample)
-        sample_url = result_json.get("result", {}).get("sample")
-        if not sample_url:
-            self._log("No sample URL found in result")
-            self._set_safe_defaults()
-            self._set_status_results(
-                was_successful=False,
-                result_details="Generation completed but no image URL was found in the response.",
-            )
-            return
-
-        # Download and save the image using generation_id in filename. A billed
-        # generation whose image cannot be retrieved is a failure, not a silent
-        # success; the provider URL is surfaced so the user can retrieve it manually.
-        try:
-            self._log("Downloading image from URL")
-            image_bytes = await File(sample_url).aread_bytes()
-            if not image_bytes:
-                msg = "downloaded image was empty"
-                raise ValueError(msg)  # noqa: TRY301
-            dest = self._output_file.build_file()
-            saved = await dest.awrite_bytes(image_bytes)
-            self.parameter_output_values["image_url"] = ImageUrlArtifact(saved.location)
-            self._log(f"Saved image as {saved.name}")
-            self._set_status_results(
-                was_successful=True, result_details=f"Image generated successfully and saved as {saved.name}."
-            )
-        except Exception as e:
-            self._log(f"Failed to retrieve image from {sample_url}: {e}")
-            self.parameter_output_values["image_url"] = None
-            self._set_status_results(
-                was_successful=False,
-                result_details=(
-                    f"{self.name} generation completed upstream but the image could not be retrieved: {e}. "
-                    f"Provider URL (may be temporary): {sample_url}"
-                ),
-            )
+        await self._save_generated_media(
+            generation_id,
+            "image_url",
+            lambda v, _n: ImageUrlArtifact(v),
+            kind=ArtifactKind.IMAGE,
+            media_kind="image",
+        )
 
     async def _process_input_image(self, image_input: Any) -> str | None:
         """Process input image and convert to base64 data URI."""

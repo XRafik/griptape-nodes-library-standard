@@ -19,13 +19,14 @@ import io
 import json as _json
 import logging
 from abc import ABC
+from collections.abc import Iterable
 from contextlib import suppress
 from typing import Any, NamedTuple
 from urllib.parse import urljoin, urlparse
 from uuid import uuid4
 
 import httpx
-from griptape_nodes.exe_types.core_types import Parameter, ParameterMode
+from griptape_nodes.exe_types.core_types import NodeError, Parameter, ParameterMode
 from griptape_nodes.exe_types.param_components.artifact_url.public_artifact_url_parameter import (
     PublicArtifactUrlParameter,
 )
@@ -45,7 +46,10 @@ from griptape_nodes_library.media import (
     is_publicly_reachable_url,
     prepare_media_data_uri,
 )
+from griptape_nodes_library.media.public_urls import adelete_uploaded_artifacts
 from griptape_nodes_library.proxy import GriptapeProxyNode
+from griptape_nodes_library.utils.griptape_cloud_headers import build_griptape_cloud_headers_async
+from griptape_nodes_library.utils.node_error_utils import error_fields, error_response, request_id_from_headers
 
 logger = logging.getLogger("griptape_nodes")
 
@@ -63,7 +67,6 @@ __all__ = [
     "coerce_video_url",
     "downscale_oversized_image_data_uri",
     "downscale_oversized_image_file",
-    "extract_video_url",
     "normalize_audio_data_uri_subtype",
     "parse_provider_response",
     "summarize_media_input",
@@ -242,28 +245,6 @@ def coerce_video_url(val: Any) -> str | None:
     return None
 
 
-def extract_video_url(obj: dict[str, Any] | None) -> str | None:
-    """Find the first http(s) video URL anywhere in a provider result payload."""
-    if not obj:
-        return None
-    for key in ("url", "video_url", "output_url"):
-        val = obj.get(key) if isinstance(obj, dict) else None
-        if isinstance(val, str) and val.startswith("http"):
-            return val
-    for key in ("result", "data", "output", "outputs", "content", "task_result"):
-        nested = obj.get(key) if isinstance(obj, dict) else None
-        if isinstance(nested, dict):
-            url = extract_video_url(nested)
-            if url:
-                return url
-        elif isinstance(nested, list):
-            for item in nested:
-                url = extract_video_url(item if isinstance(item, dict) else None)
-                if url:
-                    return url
-    return None
-
-
 def parse_provider_response(provider_response: Any) -> dict[str, Any] | None:
     """Parse provider_response if it's a JSON string."""
     if isinstance(provider_response, str):
@@ -341,7 +322,7 @@ class SeedanceProxyNode(GriptapeProxyNode, ABC):
             if downscaled_uri:
                 return downscaled_uri
 
-        public_url = self._upload_image_to_public_url(frame_url)
+        public_url = await self._upload_image_to_public_url(frame_url)
         if public_url:
             self._log(f"{self.name} {frame_label} prepared as public URL")
             return public_url
@@ -398,7 +379,7 @@ class SeedanceProxyNode(GriptapeProxyNode, ABC):
             f"{SEEDANCE_MAX_IMAGE_DIMENSION_PX}px limit; downscaled to {new_w}x{new_h}px"
         )
 
-    def _upload_image_to_public_url(self, image_value: str) -> str | None:
+    async def _upload_image_to_public_url(self, image_value: str) -> str | None:
         """Upload an image that names a file and return its public URL, or None to inline it instead.
 
         Mirrors PublicVideoUrlMixin._upload_video_to_public_url. Seedance rejects oversized JSON
@@ -415,7 +396,7 @@ class SeedanceProxyNode(GriptapeProxyNode, ABC):
             return None
 
         try:
-            return self._resolve_public_url_for_media(
+            return await self._resolve_public_url_for_media(
                 image_value, artifact_type=_ASSET_KIND_ARTIFACT_TYPES[ASSET_KIND_IMAGE]
             )
         except Exception as e:  # noqa: BLE001 - any upload failure degrades to base64
@@ -452,10 +433,6 @@ class SeedanceProxyNode(GriptapeProxyNode, ABC):
 
     # --- Provider private-asset registration (Griptape auth only) ---------------------------
 
-    def _proxy_headers(self) -> dict[str, str]:
-        """Bearer headers for the GTC proxy (same auth as the generation requests)."""
-        return {"Authorization": f"Bearer {self._validate_api_key()}", "Content-Type": "application/json"}
-
     async def _append_private_asset(self, ref: Any, *, expected_kind: str, label: str) -> str:
         """Resolve a private-asset reference to an `asset://{asset_id}` URL.
 
@@ -465,33 +442,38 @@ class SeedanceProxyNode(GriptapeProxyNode, ABC):
         actual_kind = get_provider_asset_kind(ref)
         if actual_kind != expected_kind:
             msg = (
-                f"{self.name}: {label} received a {actual_kind or 'unknown'} private-asset reference, "
+                f"'{label}' received a {actual_kind or 'unknown'} private-asset reference, "
                 f"but this input requires a {expected_kind} reference. "
                 f"Set the Seedance Human Reference Asset's Asset Kind to {expected_kind}."
             )
             raise ValueError(msg)
 
-        public_url = self._resolve_public_url_for_asset(ref, asset_kind=expected_kind)
-        headers = self._proxy_headers()
-        asset_id = await self._create_provider_asset(public_url, expected_kind, headers)
+        public_url = await self._resolve_public_url_for_asset(ref, asset_kind=expected_kind)
+        api_key = self._validate_api_key()
+        create_headers = await build_griptape_cloud_headers_async(api_key, attribution=True)
+        provider_asset_id = await self._create_provider_asset(public_url, expected_kind, create_headers)
+        # Built separately rather than reused: the status poll spends nothing, so it has nothing
+        # to attribute. Free to build -- `attribution=False` skips the engine round trip.
+        poll_headers = await build_griptape_cloud_headers_async(api_key, attribution=False)
+        asset_id = await self._poll_provider_asset(provider_asset_id, poll_headers)
         return f"asset://{asset_id}"
 
-    def _resolve_public_url_for_asset(self, ref: Any, *, asset_kind: str) -> str:
+    async def _resolve_public_url_for_asset(self, ref: Any, *, asset_kind: str) -> str:
         """Return a publicly fetchable URL for the reference's media.
 
         CreateProviderAsset requires a fetchable URL, so data URIs / unresolvable inputs raise.
         """
         media_value = get_provider_asset_value(ref)
         if not media_value:
-            msg = f"{self.name}: private-asset reference has no media value to register."
+            msg = "The private-asset reference has no media to register. Connect media to the Seedance Human Reference Asset."
             raise ValueError(msg)
 
-        public_url = self._resolve_public_url_for_media(
+        public_url = await self._resolve_public_url_for_media(
             media_value, artifact_type=_ASSET_KIND_ARTIFACT_TYPES[asset_kind]
         )
         if not is_publicly_reachable_url(public_url):
             msg = (
-                f"{self.name}: could not obtain a public URL for the {asset_kind} private asset. "
+                f"Could not get a public URL for the {asset_kind} private asset. "
                 "Provider asset registration requires a publicly fetchable URL (data URIs are not supported)."
             )
             raise RuntimeError(msg)
@@ -516,7 +498,7 @@ class SeedanceProxyNode(GriptapeProxyNode, ABC):
         candidate = GriptapeNodes.ConfigManager().workspace_path / workspace_relative
         return str(candidate) if candidate.is_file() else None
 
-    def _resolve_public_url_for_media(self, media_value: Any, *, artifact_type: str) -> str:
+    async def _resolve_public_url_for_media(self, media_value: Any, *, artifact_type: str) -> str:
         """Upload media to GTC static storage through a transient parameter and return its URL.
 
         A URL the provider can already fetch passes through untouched, per
@@ -536,7 +518,7 @@ class SeedanceProxyNode(GriptapeProxyNode, ABC):
         else:
             url = getattr(media_value, "value", media_value)
         if not isinstance(url, str) or not url:
-            msg = f"{self.name}: cannot obtain a public URL for {media_value!r}, which carries no media path or URL."
+            msg = f"Could not get a public URL for a {type(media_value).__name__} value: it has no media path or URL."
             raise ValueError(msg)
         if is_publicly_reachable_url(url):
             return url
@@ -573,9 +555,9 @@ class SeedanceProxyNode(GriptapeProxyNode, ABC):
         self._pending_asset_uploads.append((helper, scratch_name))
         self.set_parameter_value(scratch_name, upload_value)
 
-        public_url = helper.get_public_url_for_parameter()
+        public_url = await helper.aget_public_url_for_parameter()
 
-        # get_public_url_for_parameter opens with its own "is this already public?" test, and in
+        # The engine's upload opens with its own "is this already public?" test, and in
         # engine 0.96.0 that test is the weak substring form this module no longer uses
         # (public_artifact_url_parameter.py:172). So for a URL it considers public but we do not --
         # a LAN IP, a container name, plain http on a non-routable host -- it returns the value
@@ -584,7 +566,7 @@ class SeedanceProxyNode(GriptapeProxyNode, ABC):
         # keys off it), and it stays None on that pass-through, so it is what distinguishes the two.
         if helper.gtc_file_path is None:
             msg = (
-                f"{self.name}: {url} was not uploaded -- the engine treated it as already public "
+                f"{url} was not uploaded. The engine treated it as already public "
                 "and returned it unchanged, but the provider cannot fetch it."
             )
             raise RuntimeError(msg)
@@ -592,7 +574,13 @@ class SeedanceProxyNode(GriptapeProxyNode, ABC):
         return public_url
 
     async def _create_provider_asset(self, public_url: str, asset_kind: str, headers: dict[str, str]) -> str:
-        """POST proxy/v2/assets and poll to ACTIVE; return the provider asset id."""
+        """POST proxy/v2/assets; return the provider asset id to poll to ACTIVE.
+
+        Args:
+            public_url: Publicly fetchable URL the provider will pull the media from.
+            asset_kind: The provider's asset type for the reference being registered.
+            headers: Headers for the registering POST -- attributed; this is the billable call.
+        """
         create_url = urljoin(self._proxy_base, "assets")
         payload = {
             "url": public_url,
@@ -606,17 +594,26 @@ class SeedanceProxyNode(GriptapeProxyNode, ABC):
                 response.raise_for_status()
                 response_json = response.json()
         except httpx.HTTPStatusError as e:
-            msg = f"{self.name}: failed to create private asset: HTTP {e.response.status_code} - {e.response.text}"
-            raise RuntimeError(msg) from e
+            body = self._json_or_none(e.response)
+            reason = self._extract_error_message(body) if isinstance(body, dict) else e.response.text.strip()
+            msg = f"Could not register the {asset_kind} private asset"
+            msg = f"{msg}: {reason}" if reason else f"{msg}. Griptape Cloud refused the request."
+            raise NodeError(
+                msg,
+                fields=error_fields(
+                    status_code=e.response.status_code, request_id=request_id_from_headers(e.response.headers)
+                ),
+                response=error_response(body),
+            ) from e
         except Exception as e:
-            msg = f"{self.name}: failed to create private asset: {e}"
+            msg = f"Could not reach Griptape Cloud to register the {asset_kind} private asset: {e}"
             raise RuntimeError(msg) from e
 
         provider_asset_id = response_json.get("provider_asset_id")
         if not provider_asset_id:
-            msg = f"{self.name}: CreateProviderAsset returned no provider_asset_id."
-            raise RuntimeError(msg)
-        return await self._poll_provider_asset(str(provider_asset_id), headers)
+            msg = f"Griptape Cloud registered the {asset_kind} private asset but returned no provider_asset_id."
+            raise NodeError(msg, response=error_response(response_json))
+        return str(provider_asset_id)
 
     async def _poll_provider_asset(self, provider_asset_id: str, headers: dict[str, str]) -> str:
         """Poll GET proxy/v2/assets/<id> until ACTIVE; return the provider asset id.
@@ -624,6 +621,12 @@ class SeedanceProxyNode(GriptapeProxyNode, ABC):
         Transient errors (a network blip, a 5xx, or the eventual-consistency 404 right after the
         asset id is minted) are logged and retried until attempts are exhausted, mirroring the
         base class's generation poll. Only a terminal status (FAILED/DELETED) fails immediately.
+
+        Args:
+            provider_asset_id: The provider asset id returned by the registering POST.
+            headers: HTTP headers including Authorization, built with `attribution=False` --
+                these GETs cost nothing, and the POST that preceded them already attributed
+                the registration.
         """
         get_url = urljoin(self._proxy_base, f"assets/{provider_asset_id}")
         async with httpx.AsyncClient() as client:
@@ -646,24 +649,32 @@ class SeedanceProxyNode(GriptapeProxyNode, ABC):
                 if status == ASSET_STATUS_ACTIVE:
                     asset_id = result_json.get("asset_id")
                     if not asset_id:
-                        msg = f"{self.name}: private asset {provider_asset_id} is ACTIVE but no asset_id was returned."
-                        raise RuntimeError(msg)
+                        msg = f"Private asset {provider_asset_id} is ACTIVE but Griptape Cloud returned no asset_id."
+                        raise NodeError(msg, fields=error_fields(status=status), response=error_response(result_json))
                     return str(asset_id)
 
                 if status in (ASSET_STATUS_FAILED, ASSET_STATUS_DELETED):
                     detail = result_json.get("status_detail")
-                    msg = f"{self.name}: private asset {provider_asset_id} ended with status {status}: {detail}"
-                    raise RuntimeError(msg)
+                    if isinstance(detail, dict):
+                        reason = str(detail.get("details") or detail.get("error") or "")
+                    else:
+                        reason = str(detail or "")
+                    msg = (
+                        f"The provider could not register private asset {provider_asset_id}: {reason.rstrip('.')}."
+                        if reason
+                        else f"Private asset {provider_asset_id} ended as {status} and the provider gave no reason."
+                    )
+                    raise NodeError(msg, fields=error_fields(status=status), response=error_response(result_json))
 
                 await asyncio.sleep(ASSET_POLL_INTERVAL)
 
         msg = (
-            f"{self.name}: private asset {provider_asset_id} did not become ACTIVE within "
+            f"Private asset {provider_asset_id} did not become ACTIVE within "
             f"{ASSET_MAX_ATTEMPTS * ASSET_POLL_INTERVAL} seconds."
         )
         raise RuntimeError(msg)
 
-    def _cleanup_pending_asset_uploads(self) -> None:
+    async def _cleanup_pending_asset_uploads(self, extra_helpers: Iterable[PublicArtifactUrlParameter] = ()) -> None:
         """Delete the transient uploads and scratch parameters minted during a run.
 
         Provider assets are reclaimed by the backend: a submitted generation deletes its linked
@@ -671,14 +682,18 @@ class SeedanceProxyNode(GriptapeProxyNode, ABC):
         after registration) are reclaimed by the backend's orphan sweeper. The transient GTC
         static-storage upload made to feed CreateProviderAsset is ours to clean up, along with the
         scratch parameter created to perform the upload (its name is unique per call, so leaving it
-        would accumulate parameters on the node).
+        would accumulate parameters on the node). `extra_helpers` are deleted in the same concurrent
+        pass, after the scratch parameters are gone.
         """
-        for helper, scratch_name in self._pending_asset_uploads:
-            with suppress(Exception):
-                helper.delete_uploaded_artifact()
+        pending = self._pending_asset_uploads
+        self._pending_asset_uploads = []
+        # Scratch parameters go first, because a second cancel can cut the awaited deletes short.
+        for _, scratch_name in pending:
             with suppress(Exception):
                 self.remove_parameter_element_by_name(scratch_name)
-        self._pending_asset_uploads = []
+            # Removing the parameter leaves its value behind, which the next run would replay.
+            self.parameter_values.pop(scratch_name, None)
+        await adelete_uploaded_artifacts([*(helper for helper, _ in pending), *extra_helpers], node_name=self.name)
 
     # --- Provider error reporting ------------------------------------------------------------
 
@@ -691,14 +706,9 @@ class SeedanceProxyNode(GriptapeProxyNode, ABC):
         if parsed_provider_response:
             provider_error = parsed_provider_response.get("error")
             if provider_error:
+                # The base attaches the full response, so the code and type stay visible there.
                 if isinstance(provider_error, dict):
-                    error_message = provider_error.get("message", "")
-                    details = f"{self.name} {error_message}"
-                    if error_code := provider_error.get("code"):
-                        details += f"\nError Code: {error_code}"
-                    if error_type := provider_error.get("type"):
-                        details += f"\nError Type: {error_type}"
-                    return details
-                return f"{self.name} Provider error: {provider_error}"
+                    return str(provider_error.get("message") or provider_error.get("code") or "")
+                return str(provider_error)
 
         return super()._extract_error_message(response_json)

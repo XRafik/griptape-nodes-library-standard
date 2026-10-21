@@ -13,6 +13,7 @@ from griptape_nodes.exe_types.core_types import (
     ParameterMode,
 )
 from griptape_nodes.exe_types.node_types import SuccessFailureNode
+from griptape_nodes.files.file import FileLoadError
 from griptape_nodes.retained_mode.events.os_events import (
     DeleteFileRequest,
     DeleteFileResultFailure,
@@ -26,6 +27,8 @@ from griptape_nodes.retained_mode.events.os_events import (
 )
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 from griptape_nodes.traits.button import Button, ButtonDetailsMessagePayload
+
+from griptape_nodes_library.utils.macro_path_utils import resolve_macro_path
 
 # Default warning message for destructive operation
 DEFAULT_DELETION_WARNING = (
@@ -78,7 +81,7 @@ class DeleteFile(SuccessFailureNode):
             allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
             input_types=["str", "list"],
             default_value=None,
-            tooltip="Paths to files or directories to delete. Supports glob patterns (e.g., '/path/*.txt').",
+            tooltip="Paths to files or directories to delete. Supports glob patterns (e.g., `'/path/*.txt'`).",
         )
         self.add_parameter(self.file_paths)
 
@@ -171,6 +174,11 @@ class DeleteFile(SuccessFailureNode):
         # Remove duplicates
         return set(cleaned_paths)
 
+    def _fail(self, error: Exception) -> None:
+        """Mark the node failed and route the error down Failed, or raise it when Failed is not wired."""
+        self._set_status_results(was_successful=False, result_details=str(error))
+        self._handle_failure_exception(error)
+
     def process(self) -> None:
         """Execute the file deletion."""
         self._clear_execution_status()
@@ -196,13 +204,13 @@ class DeleteFile(SuccessFailureNode):
 
         # FAILURE CASE: No valid targets at all
         if not pending_targets:
-            msg = f"{self.name} attempted to delete but all paths were invalid. No files deleted"
+            msg = "All paths were invalid. No files were deleted."
             details = self._format_result_details(all_targets)
             self.set_parameter_value(self.deleted_paths_output.name, None)
-            self._set_status_results(was_successful=False, result_details=f"{msg}\n\n{details}")
             # Update warning message with error
             self.deletion_warning.variant = "error"
             self.deletion_warning.value = details
+            self._fail(ValueError(f"{msg}\n\n{details}"))
             return
 
         # Only delete explicitly requested items
@@ -229,14 +237,14 @@ class DeleteFile(SuccessFailureNode):
 
         # FAILURE CASE: Zero files were successfully deleted
         if succeeded_count == 0:
-            msg = f"{self.name} failed to delete any files"
+            msg = "No files were deleted."
             # Show all targets in details (including children)
             details = self._format_result_details(all_targets)
             self.set_parameter_value(self.deleted_paths_output.name, None)
-            self._set_status_results(was_successful=False, result_details=f"{msg}\n\n{details}")
             # Update warning message with error
             self.deletion_warning.variant = "error"
             self.deletion_warning.value = details
+            self._fail(OSError(f"{msg}\n\n{details}"))
             return
 
         # SUCCESS PATH AT END (even if some failed, as long as at least one succeeded)
@@ -435,7 +443,22 @@ class DeleteFile(SuccessFailureNode):
         self._listing_truncated = False
         all_targets: list[DeleteFileInfo] = []
 
-        for path_str in paths:
+        for raw_path in paths:
+            # Resolve project macro paths like "{outputs}/image.png" to the file on disk
+            try:
+                path_str = resolve_macro_path(raw_path)
+            except FileLoadError as e:
+                all_targets.append(
+                    DeleteFileInfo(
+                        path=raw_path,
+                        is_directory=False,
+                        absolute_path=raw_path,
+                        status=DeletionStatus.INVALID,
+                        failure_reason=f"Could not resolve macro path: {e}",
+                    )
+                )
+                continue
+
             # Check if this is a glob pattern
             if self._is_glob_pattern(path_str):
                 # Expand the pattern using ListDirectoryRequest

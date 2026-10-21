@@ -5,9 +5,6 @@ from pathlib import Path
 from typing import Any
 
 from griptape.artifacts.video_url_artifact import VideoUrlArtifact
-from griptape.drivers.prompt.griptape_cloud_prompt_driver import GriptapeCloudPromptDriver
-from griptape.structures import Agent as GriptapeAgent
-from griptape.tasks import PromptTask
 from griptape_nodes.exe_types.core_types import Parameter, ParameterGroup, ParameterList, ParameterMode
 from griptape_nodes.exe_types.node_types import SuccessFailureNode
 from griptape_nodes.exe_types.param_components.project_file_parameter import ProjectFileParameter
@@ -17,8 +14,10 @@ from griptape_nodes.files.file import File
 from griptape_nodes.retained_mode.griptape_nodes import logger
 from griptape_nodes.traits.options import Options
 
+from griptape_nodes_library.llm.model_config import cloud_model_config
+from griptape_nodes_library.llm.runner import output_to_text, prompt_model
 from griptape_nodes_library.utils.cloud_credential_utils import (
-    missing_credential_message,
+    missing_credential_error,
     resolve_cloud_api_key,
 )
 from griptape_nodes_library.utils.ffmpeg_utils import (
@@ -169,29 +168,27 @@ class SplitVideo(SuccessFailureNode):
         # Validate that we have a video
         video = self.parameter_values.get("video")
         if not video:
-            msg = f"{self.name}: Video parameter is required"
+            msg = "Connect a video to 'video'."
             exceptions.append(ValueError(msg))
-
         # Make sure it's a video artifact
-        if not isinstance(video, VideoUrlArtifact):
-            msg = f"{self.name}: Video parameter must be a VideoUrlArtifact"
+        elif not isinstance(video, VideoUrlArtifact):
+            msg = f"'video' must be a video, got {type(video).__name__}."
             exceptions.append(ValueError(msg))
-
         # Make sure it has a value
-        if hasattr(video, "value") and not video.value:  # type: ignore  # noqa: PGH003
-            msg = f"{self.name}: Video parameter must have a value"
+        elif not video.value:
+            msg = "The video connected to 'video' is empty."
             exceptions.append(ValueError(msg))
 
         split_by = self.get_parameter_value("split_by") or "timecode"
         if split_by == "timecode":
             timecodes = self.get_parameter_value("timecodes")
             if not timecodes:
-                msg = f"{self.name}: Timecodes parameter is required"
+                msg = "'timecodes' is empty. Enter the timecodes to split at."
                 exceptions.append(ValueError(msg))
         else:
             frame_ranges = self.get_parameter_value("frame_ranges")
             if not frame_ranges:
-                msg = f"{self.name}: Frame Ranges parameter is required"
+                msg = "'frame_ranges' is empty. Enter the frame ranges to split at."
                 exceptions.append(ValueError(msg))
 
         return exceptions
@@ -203,14 +200,8 @@ class SplitVideo(SuccessFailureNode):
     def _parse_timecodes_with_agent(self, timecodes_str: str) -> str:
         api_key = resolve_cloud_api_key()
         if not api_key:
-            error_msg = missing_credential_message("parse the timecodes")
-            raise ValueError(error_msg)
+            raise missing_credential_error("parse the timecodes")
 
-        prompt_driver = GriptapeCloudPromptDriver(
-            model=MODEL, api_key=api_key, stream=True, structured_output_strategy="tool"
-        )
-        agent = GriptapeAgent()
-        agent.add_task(PromptTask(prompt_driver=prompt_driver))
         msg = f"""
 Please parse the timecodes from the following string:
 {timecodes_str}
@@ -225,23 +216,13 @@ Return in this EXACT format with no commentary or other text:
 
 If no title is provided, just use "Segment X:" format.
 """
-        try:
-            response = agent.run(msg)
-            self.append_value_to_parameter("logs", f"Agent response: {response}\n")
-            self.append_value_to_parameter("logs", f"Agent output: {agent.output}\n")
-
-            # The agent.output should contain the actual response text
-            if hasattr(agent, "output") and agent.output:
-                return str(agent.output)
-            if hasattr(response, "output") and hasattr(response.output, "value"):
-                return response.output.value
-            error_msg = f"Unexpected agent response format: {response}"
-            raise ValueError(error_msg)  # noqa: TRY301
-
-        except Exception as e:
-            error_msg = f"Agent failed to parse timecodes: {e!s}"
-            self.append_value_to_parameter("logs", f"ERROR: {error_msg}\n")
-            raise ValueError(error_msg) from e
+        output = prompt_model(cloud_model_config(MODEL), msg)
+        output_text = output_to_text(output) if output else ""
+        self.append_value_to_parameter("logs", f"Agent output: {output_text}\n")
+        if not output_text:
+            error_msg = "The agent returned no text when parsing 'timecodes'."
+            raise ValueError(error_msg)
+        return output_text
 
     def _parse_agent_response(self, agent_response: str, frame_rate: float, *, drop_frame: bool) -> list[Segment]:
         """Parse the agent's response string into segments."""
@@ -389,22 +370,20 @@ If no title is provided, just use "Segment X:" format.
 
     def _parse_timecodes(self, timecodes_str: str, frame_rate: float, *, drop_frame: bool) -> list[Segment]:
         """Parse timecodes using agent-based parsing."""
-        try:
-            # Use agent to parse timecodes
-            agent_response = self._parse_timecodes_with_agent(timecodes_str)
-            self.append_value_to_parameter("logs", f"Agent response: {agent_response}\n")
+        # Use agent to parse timecodes
+        agent_response = self._parse_timecodes_with_agent(timecodes_str)
+        self.append_value_to_parameter("logs", f"Agent response: {agent_response}\n")
 
-            # Parse agent response into segments
-            segments = self._parse_agent_response(agent_response, frame_rate, drop_frame=drop_frame)
+        # Parse agent response into segments
+        segments = self._parse_agent_response(agent_response, frame_rate, drop_frame=drop_frame)
 
-            if not segments:
-                error_msg = "No valid segments found in agent response"
-                raise ValueError(error_msg)  # noqa: TRY301
-            return segments  # noqa: TRY300
-
-        except Exception as e:
-            error_msg = f"Error parsing timecodes with agent: {e!s}"
-            raise ValueError(error_msg) from e
+        if not segments:
+            error_msg = (
+                "No valid segments were found in 'timecodes'. "
+                "Enter one range per line, for example 00:00:00:00-00:00:04:07."
+            )
+            raise ValueError(error_msg)
+        return segments
 
     def _parse_frame_ranges(self, frame_ranges_str: str, frame_rate: float) -> list[Segment]:
         """Parse frame ranges into segments. Format: start-end or start-end|Title, one per line."""
@@ -456,7 +435,7 @@ If no title is provided, just use "Segment X:" format.
         try:
             run_ffmpeg_cmd(cmd, log=lambda msg: self.append_value_to_parameter("logs", msg))
         except ValueError as e:
-            raise ValueError(f"{self.name}: segment '{segment.title}': {e}") from e
+            raise ValueError(f"Segment '{segment.title}': {e}") from e
 
         output_path = Path(temp_dir) / f"{sanitize_filename(segment.title)}.mp4"
         if not output_path.exists():
@@ -472,7 +451,7 @@ If no title is provided, just use "Segment X:" format.
     def _split_video_with_ffmpeg(self, input_url: str, segments: list[Segment]) -> list[bytes]:
         """Split video into segments using ffmpeg, returning raw bytes for each."""
         if not validate_url(input_url):
-            raise ValueError(f"{self.name}: Invalid or unsafe URL provided: {input_url}")
+            raise ValueError(f"The video URL is not valid or not safe to open: {input_url}")
 
         try:
             ffmpeg_path, _ = get_ffmpeg_paths()
@@ -490,50 +469,42 @@ If no title is provided, just use "Segment X:" format.
                 return output_files
 
         except Exception as e:
-            error_msg = f"Error during video splitting: {e!s}"
-            self.append_value_to_parameter("logs", f"ERROR: {error_msg}\n")
-            raise ValueError(error_msg) from e
+            self.append_value_to_parameter("logs", f"ERROR: Could not split the video: {e}\n")
+            raise
 
     def _process(self, input_url: str, segments: list[Segment]) -> None:
         """Performs the synchronous video splitting operation."""
-        try:
-            self.append_value_to_parameter("logs", f"Splitting video into {len(segments)} segments\n")
+        self.append_value_to_parameter("logs", f"Splitting video into {len(segments)} segments\n")
 
-            output_files = self._split_video_with_ffmpeg(input_url, segments)
+        output_files = self._split_video_with_ffmpeg(input_url, segments)
 
-            # Convert output files to artifacts
-            split_video_artifacts = []
+        # Convert output files to artifacts
+        split_video_artifacts = []
 
-            for i, video_bytes in enumerate(output_files):
-                # Save to project storage
-                dest = self._output_file.build_file(_index=i + 1)
-                saved = dest.write_bytes(video_bytes)
+        for i, video_bytes in enumerate(output_files):
+            # Save to project storage
+            dest = self._output_file.build_file(_index=i + 1)
+            saved = dest.write_bytes(video_bytes)
 
-                # Create output artifact
-                video_artifact = VideoUrlArtifact(saved.location)
-                split_video_artifacts.append(video_artifact)
+            # Create output artifact
+            video_artifact = VideoUrlArtifact(saved.location)
+            split_video_artifacts.append(video_artifact)
 
-                self.append_value_to_parameter("logs", f"Saved segment {i + 1}: {saved.name}\n")
+            self.append_value_to_parameter("logs", f"Saved segment {i + 1}: {saved.name}\n")
 
-            # Save all artifacts to parameter list
-            logger.info(f"Saving {len(split_video_artifacts)} split video artifacts")
-            for i, item in enumerate(split_video_artifacts):
-                if i < len(self.split_videos_list):
-                    current_parameter = self.split_videos_list[i]
-                    self.set_parameter_value(current_parameter.name, item)
-                    # Using to ensure updates are being propagated
-                    self.publish_update_to_parameter(current_parameter.name, item)
-                    self.parameter_output_values[current_parameter.name] = item
-                    continue
-                new_child = self.split_videos_list.add_child_parameter()
-                # Set the parameter value
-                self.set_parameter_value(new_child.name, item)
-
-        except Exception as e:
-            error_message = str(e)
-            msg = f"{self.name}: Error splitting video: {error_message}"
-            self.append_value_to_parameter("logs", f"ERROR: {msg}\n")
-            raise ValueError(msg) from e
+        # Save all artifacts to parameter list
+        logger.info(f"Saving {len(split_video_artifacts)} split video artifacts")
+        for i, item in enumerate(split_video_artifacts):
+            if i < len(self.split_videos_list):
+                current_parameter = self.split_videos_list[i]
+                self.set_parameter_value(current_parameter.name, item)
+                # Using to ensure updates are being propagated
+                self.publish_update_to_parameter(current_parameter.name, item)
+                self.parameter_output_values[current_parameter.name] = item
+                continue
+            new_child = self.split_videos_list.add_child_parameter()
+            # Set the parameter value
+            self.set_parameter_value(new_child.name, item)
 
     async def aprocess(self) -> None:
         """Executes the main logic of the node asynchronously."""
@@ -575,7 +546,7 @@ If no title is provided, just use "Segment X:" format.
                 segments = self._parse_frame_ranges(frame_ranges, frame_rate)
             else:
                 self.append_value_to_parameter("logs", "Parsing timecodes...\n")
-                segments = self._parse_timecodes(timecodes, frame_rate, drop_frame=drop_frame)
+                segments = await asyncio.to_thread(self._parse_timecodes, timecodes, frame_rate, drop_frame=drop_frame)
             self.append_value_to_parameter("logs", f"Parsed {len(segments)} segments\n")
 
             # Trim segments that exceed video duration
@@ -623,11 +594,9 @@ If no title is provided, just use "Segment X:" format.
             self.append_value_to_parameter("logs", "[Finished video processing.]\n")
 
         except Exception as e:
-            error_message = str(e)
-            msg = f"{self.name}: Error splitting video: {error_message}"
-            self.append_value_to_parameter("logs", f"ERROR: {msg}\n")
-            self._set_status_results(was_successful=False, result_details=f"Video split failed: {error_message}")
-            self._handle_failure_exception(ValueError(msg))
+            self.append_value_to_parameter("logs", f"ERROR: {e}\n")
+            self._set_status_results(was_successful=False, result_details=f"Video split failed: {e}")
+            self._handle_failure_exception(e)
             return
 
         self._set_status_results(

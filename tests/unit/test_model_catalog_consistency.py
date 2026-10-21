@@ -27,6 +27,7 @@ from griptape_nodes.node_library.library_declarations import find_model_catalog,
 from griptape_nodes.node_library.library_registry import LibrarySchema
 from griptape_nodes.node_library.library_validation import validate_library_declarations
 
+from griptape_nodes_library.classification.jev_common import MODEL_CHOICES as JEV_MODEL_CHOICES
 from griptape_nodes_library.config.image.griptape_cloud_image_driver import (
     MODEL_CHOICES as GRIPTAPE_CLOUD_IMAGE_MODEL_CHOICES,
 )
@@ -43,6 +44,7 @@ from griptape_nodes_library.image.create_image import MODEL_CHOICES as GENERATE_
 from griptape_nodes_library.image.describe_image import GTC_VISION_MODEL_CHOICES as DESCRIBE_IMAGE_MODEL_CHOICES
 from griptape_nodes_library.tasks.base_task import MODEL_CHOICES as TASK_MODEL_CHOICES
 from griptape_nodes_library.tasks.mcp_task import DEFAULT_MODEL as MCP_TASK_DEFAULT_MODEL
+from griptape_nodes_library.tasks.mcp_task import MCP_TASK_MODEL_CHOICES
 from griptape_nodes_library.text.random_text import MODEL as RANDOM_TEXT_MODEL
 
 LIBRARY_JSON = Path(__file__).parents[2] / "griptape_nodes_library.json"
@@ -115,13 +117,29 @@ def test_chat_node_model_usage_matches_static_choices(class_name: str) -> None:
     assert declared == served
 
 
+def test_mcp_task_default_model_is_one_of_the_models_it_declares() -> None:
+    """`MCPTaskNode`'s fallback model must be gate-able, not just serveable.
+
+    The node falls back to `DEFAULT_MODEL` whenever the stored selection is not
+    one of the dropdown's choices, so that fallback reaches the license gate
+    like any other selection. A default absent from the node's `model_usage`
+    would resolve to no catalog key and fail closed -- the exact shape of
+    failure the dropdown was added to remove.
+    """
+    library = _load_library()
+    provider_model_id_by_catalog_id = _provider_model_id_by_catalog_id(library)
+
+    declared = [provider_model_id_by_catalog_id[model_id] for model_id in _model_usage_ids(library, "MCPTaskNode")]
+
+    assert MCP_TASK_DEFAULT_MODEL in declared
+
+
 @pytest.mark.parametrize(
     ("class_name", "expected_provider_model_ids"),
     [
         ("OpenAiPrompt", OPENAI_MODEL_CHOICES),
         ("AmazonBedrockPrompt", AMAZON_BEDROCK_MODEL_CHOICES),
         ("RandomText", [RANDOM_TEXT_MODEL]),
-        ("MCPTaskNode", [MCP_TASK_DEFAULT_MODEL]),
         ("GenerateImage", GENERATE_IMAGE_MODEL_CHOICES),
         ("GriptapeCloudImage", GRIPTAPE_CLOUD_IMAGE_MODEL_CHOICES),
         ("OpenAiImage", OPENAI_IMAGE_MODEL_CHOICES),
@@ -132,12 +150,16 @@ def test_chat_node_model_usage_matches_static_choices(class_name: str) -> None:
         ("CoherePrompt", COHERE_PROMPT_MODEL_CHOICES),
         ("GroqPrompt", GROQ_PROMPT_MODEL_CHOICES),
         ("NimPrompt", NIM_PROMPT_MODEL_CHOICES),
+        ("MCPTaskNode", MCP_TASK_MODEL_CHOICES),
         ("Askulator", TASK_MODEL_CHOICES),
         ("DateAndTime", TASK_MODEL_CHOICES),
         ("EvaluateTextResult", TASK_MODEL_CHOICES),
         ("ScrapeWeb", TASK_MODEL_CHOICES),
         ("SearchWeb", TASK_MODEL_CHOICES),
         ("SummarizeText", TASK_MODEL_CHOICES),
+        ("JevAskYesNo", JEV_MODEL_CHOICES),
+        ("JevPickOne", JEV_MODEL_CHOICES),
+        ("JevRate", JEV_MODEL_CHOICES),
     ],
 )
 def test_model_selection_node_usage_matches_static_provider_choices(

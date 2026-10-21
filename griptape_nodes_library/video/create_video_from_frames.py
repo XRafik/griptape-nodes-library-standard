@@ -23,10 +23,9 @@ from griptape_nodes.exe_types.param_types.parameter_float import ParameterFloat
 from griptape_nodes.exe_types.param_types.parameter_image import ParameterImage
 from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
 from griptape_nodes.exe_types.param_types.parameter_video import ParameterVideo
-from griptape_nodes.files.file import File
+from griptape_nodes.files.file import File, FileLoadError
 from griptape_nodes.traits.file_system_picker import FileSystemPicker
 from griptape_nodes.traits.options import Options
-from griptape_nodes.utils.artifact_normalization import _resolve_file_path
 from PIL import Image
 
 # static_ffmpeg is dynamically installed by the library loader at runtime
@@ -220,27 +219,24 @@ class CreateVideoFromFrames(SuccessFailureNode):
         format_type = self.get_parameter_value("format") or VIDEO_FORMATS[0]
 
         if not frames_input:
-            self._set_safe_defaults()
-            self._set_status_results(
-                was_successful=False,
-                result_details=f"{self.name} requires frames input (Sequence, pattern, list, or directory).",
+            self._fail(
+                ValueError(
+                    "Frames are required. Connect a Sequence, pattern, list, or directory to 'Frames or Sequence'."
+                )
             )
             return
 
         if frame_rate <= 0:
-            self._set_safe_defaults()
-            self._set_status_results(
-                was_successful=False,
-                result_details=f"{self.name}: frame rate must be > 0 (got {frame_rate})",
-            )
+            self._fail(ValueError(f"Frame rate must be greater than 0, got {frame_rate}."))
             return
 
-        frame_paths = self._get_frame_paths(frames_input)
+        try:
+            frame_paths = self._get_frame_paths(frames_input)
+        except FileLoadError as e:
+            self._fail(e)
+            return
         if not frame_paths:
-            self._set_safe_defaults()
-            self._set_status_results(
-                was_successful=False, result_details=f"{self.name}: no valid frame files found in input"
-            )
+            self._fail(ValueError("No valid frame files were found in the input."))
             return
 
         # Fill gaps for all input types — a Sequence with SKIP policy still has gaps
@@ -248,10 +244,7 @@ class CreateVideoFromFrames(SuccessFailureNode):
             frame_paths = self._process_respect_frame_numbers(frame_paths)
 
         if not frame_paths:
-            self._set_safe_defaults()
-            self._set_status_results(
-                was_successful=False, result_details=f"{self.name}: no frames remaining after ordering"
-            )
+            self._fail(ValueError("No frames remain after ordering."))
             return
 
         audio_input = self.get_parameter_value("audio")
@@ -279,10 +272,14 @@ class CreateVideoFromFrames(SuccessFailureNode):
 
         except Exception as e:
             self._set_safe_defaults()
-            error_msg = f"{self.name} failed to combine frames: {e}"
-            self._set_status_results(was_successful=False, result_details=error_msg)
-            logger.error("%s combination failed: %s", self.name, e)
-            self._handle_failure_exception(RuntimeError(error_msg))
+            self._set_status_results(was_successful=False, result_details=f"Failed to combine frames: {e}")
+            self._handle_failure_exception(e)
+
+    def _fail(self, error: Exception) -> None:
+        """Clear outputs, record the failure, and raise unless Failed is wired."""
+        self._set_safe_defaults()
+        self._set_status_results(was_successful=False, result_details=str(error))
+        self._handle_failure_exception(error)
 
     @staticmethod
     def _is_sequence(value: Any) -> bool:
@@ -296,7 +293,7 @@ class CreateVideoFromFrames(SuccessFailureNode):
             sequence = Sequence.model_validate(frames_input) if isinstance(frames_input, dict) else frames_input
             paths = []
             for entry in sequence.entries:
-                path = Path(entry.path)
+                path = Path(File(str(entry.path)).resolve())
                 if path.exists() and path.is_file() and path.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS:
                     if self._validate_image_file(path):
                         paths.append(path)
@@ -331,7 +328,7 @@ class CreateVideoFromFrames(SuccessFailureNode):
             if _is_sequence_pattern(frames_input):
                 return self._expand_sequence_pattern(frames_input)
 
-            input_path = Path(frames_input)
+            input_path = Path(File(frames_input).resolve())
             if not input_path.exists():
                 return []
 
@@ -347,8 +344,8 @@ class CreateVideoFromFrames(SuccessFailureNode):
                 paths.sort(key=lambda p: p.name)
             return paths
 
-        # --- Single ImageUrlArtifact ---
-        if isinstance(frames_input, ImageUrlArtifact):
+        # --- Single ImageUrlArtifact or serialized artifact dict ---
+        if isinstance(frames_input, (ImageUrlArtifact, dict)):
             path = self._extract_path_from_item(frames_input)
             if path and path.exists() and path.is_file() and path.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS:
                 if self._validate_image_file(path):
@@ -358,7 +355,7 @@ class CreateVideoFromFrames(SuccessFailureNode):
 
     def _expand_sequence_pattern(self, pattern: str) -> list[Path]:
         """Expand a sequence pattern (frame.####.png) to a sorted list of file paths."""
-        path = Path(pattern)
+        path = Path(File(pattern).resolve())
         directory = path.parent
         if not directory.exists():
             logger.warning("%s sequence pattern directory does not exist: %s", self.name, directory)
@@ -391,13 +388,17 @@ class CreateVideoFromFrames(SuccessFailureNode):
         return [f for _, f in found]
 
     def _extract_path_from_item(self, item: Any) -> Path | None:
-        """Extract a file path from a str, Path, or ImageUrlArtifact."""
+        """Extract a file path from a str, Path, ImageUrlArtifact, or serialized artifact dict."""
         if isinstance(item, Path):
             return item
 
         url_or_path = None
         if isinstance(item, str):
             url_or_path = item
+        elif isinstance(item, dict):
+            url_or_path = item.get("value")
+            if not isinstance(url_or_path, str) or not url_or_path:
+                return None
         elif isinstance(item, ImageUrlArtifact):
             url_or_path = item.value
             if not url_or_path:
@@ -411,8 +412,7 @@ class CreateVideoFromFrames(SuccessFailureNode):
             if not url_or_path.startswith(("http://localhost:", "https://localhost:")):
                 return self._download_url_to_temp_file(url_or_path)
 
-        resolved = _resolve_file_path(url_or_path)
-        return resolved if resolved else (Path(url_or_path) if url_or_path else None)
+        return Path(File(url_or_path).resolve()) if url_or_path else None
 
     def _download_url_to_temp_file(self, url: str) -> Path | None:
         """Download an image from a remote URL to a temporary file."""
@@ -551,10 +551,7 @@ class CreateVideoFromFrames(SuccessFailureNode):
 
             for idx, frame_path in enumerate(frame_paths):
                 seq_path = temp_path / f"frame_{idx:04d}{detected_ext}"
-                try:
-                    self._normalize_image_for_ffmpeg(frame_path, seq_path, detected_format)
-                except Exception as e:
-                    raise RuntimeError(f"Failed to normalize frame {frame_path}: {e}") from e
+                self._normalize_image_for_ffmpeg(frame_path, seq_path, detected_format)
 
             input_pattern = str(temp_path / f"frame_%04d{detected_ext}")
             output_path = temp_path / "output.gif"
@@ -597,10 +594,7 @@ class CreateVideoFromFrames(SuccessFailureNode):
 
             for idx, frame_path in enumerate(frame_paths):
                 seq_path = temp_path / f"frame_{idx:04d}{detected_ext}"
-                try:
-                    self._normalize_image_for_ffmpeg(frame_path, seq_path, detected_format)
-                except Exception as e:
-                    raise RuntimeError(f"Failed to normalize frame {frame_path}: {e}") from e
+                self._normalize_image_for_ffmpeg(frame_path, seq_path, detected_format)
 
             input_pattern = str(temp_path / f"frame_%04d{detected_ext}")
             output_path = temp_path / f"output.{format_type}"
@@ -648,11 +642,8 @@ class CreateVideoFromFrames(SuccessFailureNode):
         if not audio_url:
             return None
 
-        try:
-            return File(audio_url).resolve()
-        except Exception:
-            resolved = _resolve_file_path(audio_url)
-            return str(resolved) if resolved else audio_url
+        # Let FileLoadError propagate so the node reports why the audio path failed to resolve
+        return File(audio_url).resolve()
 
     def _build_ffmpeg_command(
         self,

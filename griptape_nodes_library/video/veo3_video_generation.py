@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import asyncio
-import base64
 import json
 import logging
 from copy import deepcopy
@@ -25,7 +23,7 @@ from griptape_nodes.traits.options import Options
 from griptape_nodes.traits.slider import Slider
 from griptape_nodes.utils.artifact_normalization import normalize_artifact_list
 
-from griptape_nodes_library.proxy import GriptapeProxyNode
+from griptape_nodes_library.proxy import ArtifactKind, GriptapeProxyNode
 
 logger = logging.getLogger("griptape_nodes")
 
@@ -443,7 +441,7 @@ class Veo3VideoGeneration(GriptapeProxyNode):
             ModelId.VEO_3_1_GENERATE_001,
             ModelId.VEO_3_1_FAST_GENERATE_001,
         }:
-            msg = f"{self.name}: lastFrame parameter is only supported by Veo 3.1 and Veo 3.1 Fast models."
+            msg = "'last frame' only works with the Veo 3.1 and Veo 3.1 Fast models. Pick one of them or disconnect 'last frame'."
             raise ValueError(msg)
 
         # referenceImages are only supported by veo-3.1-generate-001
@@ -451,13 +449,13 @@ class Veo3VideoGeneration(GriptapeProxyNode):
         has_reference_images = reference_images and len(reference_images) > 0
         if has_reference_images:
             if api_model_id != ModelId.VEO_3_1_GENERATE_001:
-                msg = f"{self.name}: referenceImages parameter is only supported by Veo 3.1 model."
+                msg = "'reference images' only works with the Veo 3.1 model. Pick it or disconnect 'reference images'."
                 raise ValueError(msg)
 
             # When referenceImages are provided, duration must be 8 seconds
             duration = params.get("duration_seconds", "6")
             if duration != "8":
-                msg = f"{self.name}: When referenceImages are provided, duration must be 8 seconds. Current duration: {duration}"
+                msg = f"The duration must be 8 seconds when 'reference images' are connected (currently {duration} seconds)."
                 raise ValueError(msg)
 
     def _convert_image_to_base64_dict(self, image_input: Any) -> dict[str, str] | None:
@@ -688,13 +686,23 @@ class Veo3VideoGeneration(GriptapeProxyNode):
         else:
             return sanitized
 
-    async def _parse_result(self, result_json: dict[str, Any], _generation_id: str) -> None:
+    async def _parse_result(self, result_json: dict[str, Any], generation_id: str) -> None:
         rai_filtered_count = result_json.get("response", {}).get("raiMediaFilteredCount", 0)
         if rai_filtered_count > 0:
             logger.warning("%s: %s video(s) filtered by RAI", self.name, rai_filtered_count)
 
-        videos_array = result_json.get("response", {}).get("videos", [])
-        if not videos_array:
+        try:
+            hosted = [a for a in await self._hosted_artifacts(generation_id) if a.kind == ArtifactKind.VIDEO]
+        except Exception as e:
+            logger.warning("%s: hosted videos could not be listed: %s", self.name, e)
+            self._set_safe_defaults()
+            self._set_status_results(
+                was_successful=False,
+                result_details=f"Generation completed but its videos could not be listed: {e}",
+            )
+            return
+
+        if not hosted:
             logger.warning("%s: No videos in result", self.name)
             self._set_safe_defaults()
             self._set_status_results(
@@ -703,8 +711,8 @@ class Veo3VideoGeneration(GriptapeProxyNode):
             )
             return
 
-        video_artifacts = await self._process_videos_from_result(videos_array)
-        if not video_artifacts:
+        video_artifacts = await self._save_videos(generation_id, len(hosted))
+        if not any(video_artifacts):
             logger.warning("%s: No videos could be processed", self.name)
             self._set_safe_defaults()
             self._set_status_results(
@@ -715,100 +723,86 @@ class Veo3VideoGeneration(GriptapeProxyNode):
 
         self._set_video_output_parameters(video_artifacts)
 
-    async def _process_videos_from_result(
-        self,
-        videos_array: list[dict[str, Any]],
-    ) -> list[VideoUrlArtifact]:
-        """Process all videos from the result array.
+    async def _save_videos(self, generation_id: str, count: int) -> list[VideoUrlArtifact | None]:
+        """Save each hosted video, in provider order, indexed for its output parameter.
 
-        Returns a list of VideoUrlArtifact objects.
+        A video that cannot be saved yields None so it keeps its slot instead of pulling
+        later videos forward.
         """
-        video_artifacts = []
+        video_artifacts: list[VideoUrlArtifact | None] = []
 
-        for idx, video_data in enumerate(videos_array, start=1):
-            artifact = await self._process_single_video(video_data, idx)
-            if artifact:
-                video_artifacts.append(artifact)
+        for position in range(count):
+            try:
+                video_bytes = await self._load_generated_media(
+                    generation_id, kind=ArtifactKind.VIDEO, position=position
+                )
+                dest = self._output_file.build_file(_index=position + 1)
+                saved = await dest.awrite_bytes(video_bytes)
+            except Exception as e:
+                logger.error("%s: Failed to process video %s: %s", self.name, position + 1, e)
+                video_artifacts.append(None)
+                continue
+
+            logger.info("%s: Saved video %s as %s", self.name, position + 1, saved.name)
+            video_artifacts.append(VideoUrlArtifact(value=saved.location, name=saved.name))
 
         return video_artifacts
 
-    async def _process_single_video(
-        self,
-        video_data: dict[str, Any],
-        idx: int,
-    ) -> VideoUrlArtifact | None:
-        """Process a single video from base64 data.
-
-        Returns a VideoUrlArtifact or None if processing failed.
-        """
-        try:
-            base64_data = video_data.get("bytesBase64Encoded")
-
-            if not base64_data:
-                logger.warning("%s: Video %s missing base64 data", self.name, idx)
-                return None
-
-            # Decode base64
-            video_bytes = await asyncio.to_thread(base64.b64decode, base64_data)
-
-            # Save using project file parameter with indexed filename
-            dest = self._output_file.build_file(_index=idx)
-            saved = await dest.awrite_bytes(video_bytes)
-
-            logger.info("%s: Saved video %s as %s (%s bytes)", self.name, idx, saved.name, len(video_bytes))
-
-            return VideoUrlArtifact(value=saved.location, name=saved.name)
-
-        except Exception as e:
-            logger.error("%s: Failed to process video %s: %s", self.name, idx, e)
-            return None
-
-    def _set_video_output_parameters(self, video_artifacts: list[VideoUrlArtifact]) -> None:
+    def _set_video_output_parameters(self, video_artifacts: list[VideoUrlArtifact | None]) -> None:
         """Set output parameters for all generated videos."""
-        # Show appropriate number of output parameters
         self._show_video_output_parameters(len(video_artifacts))
 
-        # Set individual output parameters
+        # Slots follow provider order, so video_url_N always holds the Nth hosted video
+        # and an unsaved video leaves its slot empty.
         for idx, artifact in enumerate(video_artifacts, start=1):
             param_name = "video_url" if idx == 1 else f"video_url_{idx}"
             self.parameter_output_values[param_name] = artifact
 
-        # Set success status
-        video_count = len(video_artifacts)
-        result_message = f"Generated {video_count} video{'s' if video_count > 1 else ''} successfully"
+        saved_count = sum(1 for artifact in video_artifacts if artifact is not None)
+        missing = [str(idx) for idx, artifact in enumerate(video_artifacts, start=1) if artifact is None]
+        if missing:
+            result_message = (
+                f"Saved {saved_count} of {len(video_artifacts)} videos. "
+                f"Video(s) {', '.join(missing)} could not be retrieved; their output slots are empty."
+            )
+        else:
+            result_message = f"Generated {saved_count} video{'s' if saved_count > 1 else ''} successfully"
         self._set_status_results(
             was_successful=True,
             result_details=result_message,
         )
 
     def _extract_error_message(self, response_json: dict[str, Any] | None) -> str:
-        """Extract detailed error message from API response.
+        """Extract the provider's reason from a failed generation response.
 
         The v2 API provides errors in status_detail field.
         """
         if not response_json:
-            return f"{self.name}: Generation failed with no error details"
+            return ""
 
         # Check v2 API status_detail first (for FAILED/ERROR statuses)
         status_detail = response_json.get("status_detail")
-        if status_detail:
-            return f"{self.name}: Generation failed\n\n{json.dumps(status_detail, indent=2)}"
+        if isinstance(status_detail, dict):
+            reason = status_detail.get("details") or status_detail.get("error")
+            if reason:
+                return str(reason)
+        elif status_detail:
+            return str(status_detail)
 
         # Check top-level error field
         top_level_error = response_json.get("error")
+        if isinstance(top_level_error, dict):
+            return str(top_level_error.get("message") or top_level_error.get("error") or "")
         if top_level_error:
-            if isinstance(top_level_error, dict):
-                return f"{self.name}: {json.dumps(top_level_error, indent=2)}"
-            return f"{self.name}: {top_level_error}"
+            return str(top_level_error)
 
-        # Final fallback
-        status = self._extract_status(response_json) or "unknown"
-        return f"{self.name}: Generation failed with status '{status}'"
+        return ""
 
     def _handle_payload_build_error(self, e: Exception) -> None:
         if isinstance(e, ValueError):
             self._set_safe_defaults()
             self._set_status_results(was_successful=False, result_details=str(e))
+            self._handle_failure_exception(e)
             return
 
         super()._handle_payload_build_error(e)

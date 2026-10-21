@@ -29,19 +29,23 @@
   "metadata": {
     "author": "Griptape, Inc",
     "description": "Default nodes for Griptape Nodes",
-    "library_version": "0.85.0",
-    "engine_version": "0.97.0",
+    "library_version": "0.89.0",
+    "engine_version": "0.104.0",
     "tags": [
       "Griptape",
       "AI"
     ],
     "dependencies": {
       "pip_dependencies": [
-        "griptape[drivers-prompt-amazon-bedrock,drivers-prompt-anthropic,drivers-prompt-cohere,drivers-prompt-ollama,drivers-web-scraper-trafilatura,drivers-web-search-duckduckgo,drivers-web-search-exa,loaders-image,loaders-pdf]>=1.9.4",
+        "griptape[loaders-image,loaders-pdf]>=1.11.0",
+        "pydantic-ai-slim[anthropic,bedrock,cohere,mcp,openai]>=2.48.0",
+        "ddgs>=9.0.0",
+        "exa-py>=2.0.0",
+        "trafilatura>=2.0",
+        "dateparser>=1.2.0",
         "json-repair>=0.46.1",
         "static-ffmpeg>=2.8",
         "jmespath>=1.0.1",
-        "json-schema-to-pydantic>=0.4.6",
         "numpy>=1.26.0",
         "scikit-learn>=1.3.0",
         "threadpoolctl>=3.0.0",
@@ -86,6 +90,18 @@
                 "display_name": "Claude Haiku 4.5",
                 "family": "Claude 4",
                 "provider_model_id": "claude-haiku-4-5",
+                "key_support": "SUPPORTS_CUSTOMER_KEY_OR_GRIPTAPE_KEY"
+              },
+              "gtc_claude_sonnet_5_5": {
+                "display_name": "Claude Sonnet 5.5",
+                "family": "Claude 5",
+                "provider_model_id": "claude-sonnet-5-5",
+                "key_support": "SUPPORTS_CUSTOMER_KEY_OR_GRIPTAPE_KEY"
+              },
+              "gtc_claude_opus_5_5": {
+                "display_name": "Claude Opus 5.5",
+                "family": "Claude 5",
+                "provider_model_id": "claude-opus-5-5",
                 "key_support": "SUPPORTS_CUSTOMER_KEY_OR_GRIPTAPE_KEY"
               },
               "gtc_claude_opus_5": {
@@ -228,6 +244,48 @@
           "openai": {
             "display_name": "OpenAI",
             "models": {
+              "gtc_gpt_6_sol": {
+                "display_name": "GPT-6 Sol",
+                "family": "GPT",
+                "provider_model_id": "gpt-6-sol",
+                "key_support": "SUPPORTS_CUSTOMER_KEY_OR_GRIPTAPE_KEY"
+              },
+              "gtc_gpt_6_luna": {
+                "display_name": "GPT-6 Luna",
+                "family": "GPT",
+                "provider_model_id": "gpt-6-luna",
+                "key_support": "SUPPORTS_CUSTOMER_KEY_OR_GRIPTAPE_KEY"
+              },
+              "gtc_gpt_5_6_sol": {
+                "display_name": "GPT-5.6 Sol",
+                "family": "GPT",
+                "provider_model_id": "gpt-5.6-sol",
+                "key_support": "SUPPORTS_CUSTOMER_KEY_OR_GRIPTAPE_KEY"
+              },
+              "gtc_gpt_5_6_terra": {
+                "display_name": "GPT-5.6 Terra",
+                "family": "GPT",
+                "provider_model_id": "gpt-5.6-terra",
+                "key_support": "SUPPORTS_CUSTOMER_KEY_OR_GRIPTAPE_KEY"
+              },
+              "gtc_gpt_5_6_luna": {
+                "display_name": "GPT-5.6 Luna",
+                "family": "GPT",
+                "provider_model_id": "gpt-5.6-luna",
+                "key_support": "SUPPORTS_CUSTOMER_KEY_OR_GRIPTAPE_KEY"
+              },
+              "gtc_gpt_5_5": {
+                "display_name": "GPT-5.5",
+                "family": "GPT",
+                "provider_model_id": "gpt-5.5",
+                "key_support": "SUPPORTS_CUSTOMER_KEY_OR_GRIPTAPE_KEY"
+              },
+              "gtc_gpt_5_4": {
+                "display_name": "GPT-5.4",
+                "family": "GPT",
+                "provider_model_id": "gpt-5.4",
+                "key_support": "SUPPORTS_CUSTOMER_KEY_OR_GRIPTAPE_KEY"
+              },
               "gtc_gpt_5_2": {
                 "display_name": "GPT-5.2",
                 "family": "GPT",
@@ -334,6 +392,18 @@
                 "display_name": "GPT Image 2",
                 "family": "GPT Image",
                 "provider_model_id": "gpt-image-2",
+                "key_support": "SUPPORTS_CUSTOMER_KEY_OR_GRIPTAPE_KEY"
+              },
+              "gtc_gpt_image_2_5_sunburst": {
+                "display_name": "GPT Image 2.5 Sunburst",
+                "family": "GPT Image",
+                "provider_model_id": "gpt-image-2.5-sunburst",
+                "key_support": "SUPPORTS_CUSTOMER_KEY_OR_GRIPTAPE_KEY"
+              },
+              "gtc_gpt_image_2_5_flare": {
+                "display_name": "GPT Image 2.5 Flare",
+                "family": "GPT Image",
+                "provider_model_id": "gpt-image-2.5-flare",
                 "key_support": "SUPPORTS_CUSTOMER_KEY_OR_GRIPTAPE_KEY"
               },
               "gtc_sora_2": {
@@ -554,34 +624,10 @@
           "dashscope": {
             "display_name": "Alibaba Cloud Model Studio",
             "models": {
-              "gtc_qwen_image": {
-                "display_name": "Qwen Image",
+              "gtc_qwen_image_3_0": {
+                "display_name": "Qwen Image 3.0",
                 "family": "Qwen",
-                "provider_model_id": "qwen-image",
-                "key_support": "SUPPORTS_CUSTOMER_KEY_OR_GRIPTAPE_KEY"
-              },
-              "gtc_qwen_image_plus": {
-                "display_name": "Qwen Image Plus",
-                "family": "Qwen",
-                "provider_model_id": "qwen-image-plus",
-                "key_support": "SUPPORTS_CUSTOMER_KEY_OR_GRIPTAPE_KEY"
-              },
-              "gtc_qwen_image_edit": {
-                "display_name": "Qwen Image Edit",
-                "family": "Qwen",
-                "provider_model_id": "qwen-image-edit",
-                "key_support": "SUPPORTS_CUSTOMER_KEY_OR_GRIPTAPE_KEY"
-              },
-              "gtc_qwen_image_edit_plus": {
-                "display_name": "Qwen Image Edit Plus",
-                "family": "Qwen",
-                "provider_model_id": "qwen-image-edit-plus",
-                "key_support": "SUPPORTS_CUSTOMER_KEY_OR_GRIPTAPE_KEY"
-              },
-              "gtc_qwen_image_edit_plus_2025_10_30": {
-                "display_name": "Qwen Image Edit Plus (2025-10-30)",
-                "family": "Qwen",
-                "provider_model_id": "qwen-image-edit-plus-2025-10-30",
+                "provider_model_id": "qwen-image-3.0",
                 "key_support": "SUPPORTS_CUSTOMER_KEY_OR_GRIPTAPE_KEY"
               },
               "gtc_wan_2_7_image_pro": {
@@ -843,28 +889,10 @@
                 "provider_model_id": "kling-v2-5-turbo",
                 "key_support": "SUPPORTS_CUSTOMER_KEY_OR_GRIPTAPE_KEY"
               },
-              "gtc_kling_v2_1_master": {
-                "display_name": "Kling v2.1 Master",
-                "family": "Kling",
-                "provider_model_id": "kling-v2-1-master",
-                "key_support": "SUPPORTS_CUSTOMER_KEY_OR_GRIPTAPE_KEY"
-              },
               "gtc_kling_v2_1": {
                 "display_name": "Kling v2.1",
                 "family": "Kling",
                 "provider_model_id": "kling-v2-1",
-                "key_support": "SUPPORTS_CUSTOMER_KEY_OR_GRIPTAPE_KEY"
-              },
-              "gtc_kling_v2_master": {
-                "display_name": "Kling v2 Master",
-                "family": "Kling",
-                "provider_model_id": "kling-v2-master",
-                "key_support": "SUPPORTS_CUSTOMER_KEY_OR_GRIPTAPE_KEY"
-              },
-              "gtc_kling_v1_6": {
-                "display_name": "Kling v1.6",
-                "family": "Kling",
-                "provider_model_id": "kling-v1-6",
                 "key_support": "SUPPORTS_CUSTOMER_KEY_OR_GRIPTAPE_KEY"
               },
               "gtc_kling_v1_5": {
@@ -1248,6 +1276,23 @@
             "notes": "Ollama is a local-runtime provider: models are whatever the user has pulled into their own local Ollama server, discovered dynamically by OllamaPrompt at runtime rather than declared statically here. The provider declares no models and sets key_support at the provider level instead, per KeySupport's documented default for a local-runtime provider with no enumerated models of its own.",
             "key_support": "NO_KEY_REQUIRED",
             "models": {}
+          },
+          "typesafe": {
+            "display_name": "TypeSafe",
+            "models": {
+              "gtc_jev_latest": {
+                "display_name": "JEV Latest",
+                "family": "JEV",
+                "provider_model_id": "jev-latest",
+                "key_support": "SUPPORTS_CUSTOMER_KEY_OR_GRIPTAPE_KEY"
+              },
+              "gtc_jev_preview": {
+                "display_name": "JEV Preview",
+                "family": "JEV",
+                "provider_model_id": "jev-preview",
+                "key_support": "SUPPORTS_CUSTOMER_KEY_OR_GRIPTAPE_KEY"
+              }
+            }
           }
         }
       }
@@ -1578,6 +1623,14 @@
         "title": "Filesystem",
         "description": "Nodes for configuring and managing file paths",
         "icon": "FolderCog"
+      }
+    },
+    {
+      "classification": {
+        "color": "border-emerald-500",
+        "title": "Classification",
+        "icon": "Scale",
+        "description": "Text classification nodes"
       }
     }
   ],
@@ -1994,6 +2047,22 @@
       }
     },
     {
+      "class_name": "JoinList",
+      "file_path": "griptape_nodes_library/lists/join_list.py",
+      "metadata": {
+        "category": "lists",
+        "description": "Joins the items of a list into one text, with a separator between items and an optional prefix and suffix on each.",
+        "display_name": "Join List",
+        "icon": "merge",
+        "group": "merge",
+        "tags": [
+          "text",
+          "list",
+          "data"
+        ]
+      }
+    },
+    {
       "class_name": "SplitText",
       "file_path": "griptape_nodes_library/lists/split_text.py",
       "metadata": {
@@ -2060,6 +2129,8 @@
             "type": "model_usage",
             "model_ids": [
               "gtc_claude_sonnet_5",
+              "gtc_claude_sonnet_5_5",
+              "gtc_claude_opus_5_5",
               "gtc_claude_opus_5",
               "gtc_claude_haiku_4_5",
               "gtc_gemini_3_6_flash",
@@ -2071,6 +2142,13 @@
               "gtc_gemini_2_5_pro",
               "gtc_gemini_2_5_flash",
               "gtc_gemini_2_5_flash_lite",
+              "gtc_gpt_6_sol",
+              "gtc_gpt_6_luna",
+              "gtc_gpt_5_6_sol",
+              "gtc_gpt_5_6_terra",
+              "gtc_gpt_5_6_luna",
+              "gtc_gpt_5_5",
+              "gtc_gpt_5_4",
               "gtc_gpt_5_2",
               "gtc_gpt_5_2_chat",
               "gtc_gpt_5_1",
@@ -2734,10 +2812,7 @@
             "model_ids": [
               "gtc_kling_v3",
               "gtc_kling_v2_6",
-              "gtc_kling_v2_5_turbo",
-              "gtc_kling_v2_1_master",
-              "gtc_kling_v2_master",
-              "gtc_kling_v1_6"
+              "gtc_kling_v2_5_turbo"
             ]
           }
         ]
@@ -2766,10 +2841,7 @@
               "gtc_kling_v3",
               "gtc_kling_v2_6",
               "gtc_kling_v2_5_turbo",
-              "gtc_kling_v2_1_master",
               "gtc_kling_v2_1",
-              "gtc_kling_v2_master",
-              "gtc_kling_v1_6",
               "gtc_kling_v1_5",
               "gtc_kling_v1"
             ]
@@ -3064,7 +3136,7 @@
       "file_path": "griptape_nodes_library/video/sora_video_generation.py",
       "metadata": {
         "category": "video",
-        "description": "Generate video using Sora 2 models via Griptape Cloud model proxy",
+        "description": "Deprecated: OpenAI removes Sora 2 on 24 September 2026. Migrate to Veo 3.1 or Seedance 2.0 video generation.",
         "display_name": "Sora 2 Video Generation",
         "icon": "Sparkles",
         "group": "create",
@@ -3074,9 +3146,19 @@
           "ai",
           "api",
           "sora",
-          "openai"
+          "openai",
+          "retired",
+          "deprecated"
         ],
+        "deprecation": {
+          "deprecation_message": "OpenAI removes the Videos API and all Sora 2 models on 24 September 2026 without naming a successor. Open the node and use its migrate buttons to rebuild it as Veo 3.1 Video Generation or Seedance 2.0 Video Generation, carrying over values and connections.",
+          "removal_version": "0.88.0"
+        },
         "declarations": [
+          {
+            "type": "lifecycle_stage",
+            "stage": "DEPRECATED"
+          },
           {
             "type": "model_usage",
             "model_ids": [
@@ -3548,6 +3630,23 @@
         "tags": [
           "video",
           "composite",
+          "ffmpeg"
+        ]
+      }
+    },
+    {
+      "class_name": "ExtractFrames",
+      "file_path": "griptape_nodes_library/video/extract_frames.py",
+      "metadata": {
+        "category": "video",
+        "description": "Extract specific frames from a video and save them as images",
+        "display_name": "Extract Frames",
+        "icon": "film",
+        "group": "describe",
+        "tags": [
+          "video",
+          "image",
+          "frames",
           "ffmpeg"
         ]
       }
@@ -4112,6 +4211,22 @@
       }
     },
     {
+      "class_name": "GroupByKey",
+      "file_path": "griptape_nodes_library/dict/group_by_key.py",
+      "metadata": {
+        "category": "dict",
+        "description": "Groups a list of dictionaries into a dictionary of lists, by key or by a field",
+        "display_name": "Group By Key",
+        "group": "merge",
+        "tags": [
+          "data",
+          "dictionary",
+          "group",
+          "list"
+        ]
+      }
+    },
+    {
       "class_name": "SaveDictionary",
       "file_path": "griptape_nodes_library/dict/save_dict.py",
       "metadata": {
@@ -4372,6 +4487,8 @@
             "type": "model_usage",
             "model_ids": [
               "gtc_claude_sonnet_5",
+              "gtc_claude_sonnet_5_5",
+              "gtc_claude_opus_5_5",
               "gtc_claude_opus_5",
               "gtc_claude_haiku_4_5",
               "gtc_gemini_3_6_flash",
@@ -4383,6 +4500,13 @@
               "gtc_gemini_2_5_pro",
               "gtc_gemini_2_5_flash",
               "gtc_gemini_2_5_flash_lite",
+              "gtc_gpt_6_sol",
+              "gtc_gpt_6_luna",
+              "gtc_gpt_5_6_sol",
+              "gtc_gpt_5_6_terra",
+              "gtc_gpt_5_6_luna",
+              "gtc_gpt_5_5",
+              "gtc_gpt_5_4",
               "gtc_gpt_5_2",
               "gtc_gpt_5_2_chat",
               "gtc_gpt_5_1",
@@ -4570,6 +4694,11 @@
           {
             "type": "model_usage",
             "model_ids": [
+              "gtc_gpt_5_6_sol",
+              "gtc_gpt_5_6_terra",
+              "gtc_gpt_5_6_luna",
+              "gtc_gpt_5_5",
+              "gtc_gpt_5_4",
               "gtc_gpt_5_2",
               "gtc_gpt_5_1",
               "gtc_gpt_5",
@@ -4636,6 +4765,8 @@
             "type": "model_usage",
             "model_ids": [
               "gtc_claude_sonnet_5",
+              "gtc_claude_sonnet_5_5",
+              "gtc_claude_opus_5_5",
               "gtc_claude_opus_5",
               "gtc_gemini_3_6_flash",
               "gtc_gemini_3_5_flash",
@@ -4646,6 +4777,13 @@
               "gtc_gemini_2_5_pro",
               "gtc_gemini_2_5_flash",
               "gtc_gemini_2_5_flash_lite",
+              "gtc_gpt_6_sol",
+              "gtc_gpt_6_luna",
+              "gtc_gpt_5_6_sol",
+              "gtc_gpt_5_6_terra",
+              "gtc_gpt_5_6_luna",
+              "gtc_gpt_5_5",
+              "gtc_gpt_5_4",
               "gtc_gpt_5_2",
               "gtc_gpt_5_1",
               "gtc_gpt_5",
@@ -4889,8 +5027,7 @@
           {
             "type": "model_usage",
             "model_ids": [
-              "gtc_qwen_image",
-              "gtc_qwen_image_plus"
+              "gtc_qwen_image_3_0"
             ]
           }
         ]
@@ -4916,9 +5053,7 @@
           {
             "type": "model_usage",
             "model_ids": [
-              "gtc_qwen_image_edit",
-              "gtc_qwen_image_edit_plus",
-              "gtc_qwen_image_edit_plus_2025_10_30"
+              "gtc_qwen_image_3_0"
             ]
           }
         ]
@@ -5029,6 +5164,38 @@
           "image",
           "filter",
           "negative"
+        ]
+      }
+    },
+    {
+      "class_name": "PremultiplyImage",
+      "file_path": "griptape_nodes_library/image/premultiply_image.py",
+      "metadata": {
+        "category": "image",
+        "description": "Convert straight alpha to premultiplied for tools and file pipelines that expect it. Library nodes use straight alpha, so set input_alpha to premultiplied on Merge Images if you connect the result there.",
+        "display_name": "Premultiply Image",
+        "group": "edit",
+        "tags": [
+          "image",
+          "alpha",
+          "composite",
+          "premult"
+        ]
+      }
+    },
+    {
+      "class_name": "UnpremultiplyImage",
+      "file_path": "griptape_nodes_library/image/unpremultiply_image.py",
+      "metadata": {
+        "category": "image",
+        "description": "Recover the original RGB values from a premultiplied render. Fixes dark fringes on transparent edges before colour-grading or further compositing.",
+        "display_name": "Unpremultiply Image",
+        "group": "edit",
+        "tags": [
+          "image",
+          "alpha",
+          "composite",
+          "premult"
         ]
       }
     },
@@ -5493,7 +5660,9 @@
             "model_ids": [
               "gtc_gpt_image_1",
               "gtc_gpt_image_1_5",
-              "gtc_gpt_image_2"
+              "gtc_gpt_image_2",
+              "gtc_gpt_image_2_5_sunburst",
+              "gtc_gpt_image_2_5_flare"
             ]
           }
         ]
@@ -6154,7 +6323,28 @@
           {
             "type": "model_usage",
             "model_ids": [
-              "gtc_gpt_4_1"
+              "gtc_claude_sonnet_5",
+              "gtc_claude_opus_5",
+              "gtc_claude_haiku_4_5",
+              "gtc_gemini_3_6_flash",
+              "gtc_gemini_3_1_pro",
+              "gtc_gemini_3_flash",
+              "gtc_gemini_2_5_pro",
+              "gtc_gemini_2_5_flash",
+              "gtc_gemini_2_5_flash_lite",
+              "gtc_gpt_5_5",
+              "gtc_gpt_5_4",
+              "gtc_gpt_5_2",
+              "gtc_gpt_5_2_chat",
+              "gtc_gpt_5_1",
+              "gtc_gpt_5",
+              "gtc_gpt_5_mini",
+              "gtc_gpt_5_nano",
+              "gtc_gpt_4_1",
+              "gtc_gpt_4_1_mini",
+              "gtc_gpt_4_1_nano",
+              "gtc_gpt_4o",
+              "gtc_deepseek_v3"
             ]
           }
         ]
@@ -6766,6 +6956,22 @@
       }
     },
     {
+      "class_name": "DeleteVariable",
+      "file_path": "griptape_nodes_library/variables/delete_variable.py",
+      "metadata": {
+        "category": "variables",
+        "description": "Delete one or more variables by name. Accepts a single name or a list of names.",
+        "display_name": "Delete Variable",
+        "icon": "Trash",
+        "group": "edit",
+        "tags": [
+          "data",
+          "variable",
+          "workflow"
+        ]
+      }
+    },
+    {
       "class_name": "SetVariableSubstitution",
       "file_path": "griptape_nodes_library/variables/set_variable_substitution.py",
       "metadata": {
@@ -7118,6 +7324,66 @@
           "file"
         ]
       }
+    },
+    {
+      "class_name": "JevAskYesNo",
+      "file_path": "griptape_nodes_library/classification/jev_ask_yes_no.py",
+      "metadata": {
+        "category": "classification",
+        "description": "Ask a yes/no question about text using TypeSafe JEV.",
+        "display_name": "Ask Yes/No (JEV)",
+        "icon": "check-circle",
+        "group": "classification",
+        "declarations": [
+          {
+            "type": "model_usage",
+            "model_ids": [
+              "gtc_jev_latest",
+              "gtc_jev_preview"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "class_name": "JevPickOne",
+      "file_path": "griptape_nodes_library/classification/jev_pick_one.py",
+      "metadata": {
+        "category": "classification",
+        "description": "Pick the option that best fits some text using TypeSafe JEV.",
+        "display_name": "Pick One (JEV)",
+        "icon": "list-checks",
+        "group": "classification",
+        "declarations": [
+          {
+            "type": "model_usage",
+            "model_ids": [
+              "gtc_jev_latest",
+              "gtc_jev_preview"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "class_name": "JevRate",
+      "file_path": "griptape_nodes_library/classification/jev_rate.py",
+      "metadata": {
+        "category": "classification",
+        "description": "Rate text against levels you describe using TypeSafe JEV.",
+        "display_name": "Rate (JEV)",
+        "icon": "bar-chart-2",
+        "group": "classification",
+        "declarations": [
+          {
+            "type": "model_usage",
+            "model_ids": [
+              "gtc_jev_latest",
+              "gtc_jev_preview"
+            ]
+          }
+        ]
+      }
     }
   ],
   "workflows": [
@@ -7126,6 +7392,10 @@
     "workflows/templates/fill_in_the_story.py",
     "workflows/templates/flux_2_-_magazine_cover.py",
     "workflows/templates/flux_2_-_replace_a_face.py",
+    "workflows/templates/jev_pick_the_look.py",
+    "workflows/templates/jev_prompt_clearance.py",
+    "workflows/templates/jev_review_note_workflow.py",
+    "workflows/templates/jev_shot_check.py",
     "workflows/templates/nano_banana_-_image_collage.py",
     "workflows/templates/nano_banana_pro_-_image_collage.py",
     "workflows/templates/nano_banana_pro_-_product_advertisement.py",

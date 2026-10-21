@@ -126,7 +126,7 @@ class OmnihumanSubjectDetection(GriptapeProxyNode):
         try:
             await super()._process_generation()
         finally:
-            self._public_image_url_parameter.delete_uploaded_artifact()
+            await self._public_image_url_parameter.adelete_uploaded_artifact()
 
     def validate_before_node_run(self) -> list[Exception] | None:
         exceptions = super().validate_before_node_run() or []
@@ -135,7 +135,7 @@ class OmnihumanSubjectDetection(GriptapeProxyNode):
         return exceptions if exceptions else None
 
     def _missing_image_message(self) -> str:
-        return f"{self.name} requires an input image. Set the Image URL parameter or connect an image to it."
+        return "An input image is required. Connect an image to 'Image URL' or enter its URL."
 
     async def _build_payload(self) -> dict[str, Any]:
         provider_model_id = self._get_selected_model_id()
@@ -146,7 +146,7 @@ class OmnihumanSubjectDetection(GriptapeProxyNode):
 
         # OmniHuman downloads the image server-side, so it needs a publicly
         # reachable URL rather than an inline data URI.
-        image_url = self._public_image_url_parameter.get_public_url_for_parameter()
+        image_url = await self._public_image_url_parameter.aget_public_url_for_parameter()
 
         return {
             "req_key": self._get_req_key(provider_model_id),

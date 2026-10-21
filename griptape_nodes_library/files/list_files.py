@@ -55,13 +55,13 @@ class ListFiles(SuccessFailureNode):
         self.match_pattern = ParameterString(
             name="match_pattern",
             default_value="",
-            tooltip="Filter by filename using wildcards. Use * to match anything (e.g. *.jpg, render_*.png). Include a folder name or ** to search inside subfolders (e.g. **/outputs/images/*.png finds PNGs in any outputs/images/ folder). Leave empty to include everything.",
+            tooltip="Filter files by wildcard pattern.\n\n- `*` matches anything within a folder: `*.jpg`, `render_*.png`\n- `**` searches inside subfolders: `**/outputs/images/*.png`\n\nLeave empty to include everything.",
             placeholder_text="Filter files (e.g. *.jpg or **/outputs/images/*.png)",
         )
         self.match_pattern_case_sensitive = ParameterBool(
             name="match_pattern_case_sensitive",
             default_value=True,
-            tooltip="When match_pattern is set: if True, letter case must match; if False, matching is case-insensitive (e.g. *.jpg matches .JPG). Ignored when match_pattern is empty.",
+            tooltip="Controls case sensitivity when `match_pattern` is set.\n\n- **On** — `*.jpg` only matches `.jpg`, not `.JPG`\n- **Off** — `*.jpg` matches `.jpg`, `.JPG`, `.Jpg`, etc.\n\nIgnored when `match_pattern` is empty.",
         )
         self.show_hidden = ParameterBool(
             name="show_hidden",
@@ -74,7 +74,7 @@ class ListFiles(SuccessFailureNode):
             name="list_options",
             allow_output=False,
             default_value=LIST_OPTIONS[0],
-            tooltip="The options for the list files and folders.",
+            tooltip="What to include in results:\n\n- **List files and folders** — everything\n- **List files only** — no directories\n- **List folders only** — no files",
             traits={Options(choices=LIST_OPTIONS)},
         )
 
@@ -82,7 +82,7 @@ class ListFiles(SuccessFailureNode):
             name="recursive",
             allow_output=False,
             default_value=False,
-            tooltip="If True, walk subdirectories and include matches at every depth. If False, only the directory_path level is listed. Automatically enabled when match_pattern contains / or **.",
+            tooltip="If True, walk subdirectories and include matches at every depth. If False, only the `directory_path` level is listed. Automatically enabled when `match_pattern` contains `/` or `**`.",
         )
 
         self.use_absolute_paths = ParameterBool(
@@ -96,7 +96,7 @@ class ListFiles(SuccessFailureNode):
             name="sort_by",
             allow_output=False,
             default_value=SORT_OPTIONS[0],
-            tooltip="Sort results. 'Unsorted' preserves filesystem order; 'Alphabetical' sorts by name; 'Date Modified' sorts by last modification time.",
+            tooltip="How to sort results:\n\n- **Unsorted** — preserves filesystem order\n- **Alphabetical** — sorts by name\n- **Date Modified** — sorts by last modification time",
             traits={Options(choices=SORT_OPTIONS)},
         )
 
@@ -104,7 +104,7 @@ class ListFiles(SuccessFailureNode):
             name="sort_order",
             allow_output=False,
             default_value=ORDER_OPTIONS[0],
-            tooltip="Sort direction: 'Ascending' (A→Z or oldest→newest) or 'Descending' (Z→A or newest→oldest). Ignored when sort_by is 'Unsorted'.",
+            tooltip="Sort direction. Ignored when **Sort By** is Unsorted.\n\n- **Ascending** — A→Z or oldest→newest\n- **Descending** — Z→A or newest→oldest",
             traits={Options(choices=ORDER_OPTIONS)},
         )
 
@@ -331,6 +331,11 @@ class ListFiles(SuccessFailureNode):
 
         return collected, None
 
+    def _fail(self, error: Exception) -> None:
+        """Mark the node failed and route the error down Failed, or raise it when Failed is not wired."""
+        self._set_status_results(was_successful=False, result_details=f"Failure: {error}")
+        self._handle_failure_exception(error)
+
     def process(self) -> None:
         self._clear_execution_status()
         directory_path = self.get_parameter_value("directory_path")
@@ -344,14 +349,14 @@ class ListFiles(SuccessFailureNode):
         recursive = self.get_parameter_value("recursive")
         if self._is_path_pattern(match_pattern.strip()):
             if not (directory_path or "").strip():
-                msg = f"{self.name}: directory_path is required when match_pattern contains / or **"
-                self._set_status_results(was_successful=False, result_details=f"Failure: {msg}")
+                msg = "'directory_path' is required when 'match_pattern' contains / or **. Set a folder to search."
+                self._fail(ValueError(msg))
                 return
             try:
                 self._compile_path_pattern(match_pattern.strip(), case_sensitive=match_pattern_case_sensitive)
             except re.error as e:
-                msg = f"{self.name}: match_pattern {match_pattern.strip()!r} is not valid — {e}"
-                self._set_status_results(was_successful=False, result_details=f"Failure: {msg}")
+                msg = f"'match_pattern' {match_pattern.strip()!r} is not valid: {e}"
+                self._fail(ValueError(msg))
                 return
             # Path patterns need recursion; _collect_entries_recursive does path-relative
             # matching while _filter_entries (flat branch) only matches basenames.
@@ -387,8 +392,8 @@ class ListFiles(SuccessFailureNode):
                 match_pattern_case_sensitive=match_pattern_case_sensitive,
             )
             if list_error:
-                msg = f"{self.name} failed to list directory: {list_error}"
-                self._set_status_results(was_successful=False, result_details=f"Failure: {msg}")
+                msg = f"Could not list the folder: {list_error}"
+                self._fail(OSError(msg))
                 return
         else:
             request = ListDirectoryRequest(
@@ -400,13 +405,13 @@ class ListFiles(SuccessFailureNode):
 
             if isinstance(result, ListDirectoryResultFailure):
                 error_msg = getattr(result, "error_message", "Unknown error occurred")
-                msg = f"{self.name} failed to list directory: {error_msg}"
-                self._set_status_results(was_successful=False, result_details=f"Failure: {msg}")
+                msg = f"Could not list the folder: {error_msg}"
+                self._fail(OSError(msg))
                 return
 
             if not isinstance(result, ListDirectoryResultSuccess):
-                msg = f"{self.name} received unexpected result type from directory listing"
-                self._set_status_results(was_successful=False, result_details=f"Failure: {msg}")
+                msg = "The folder listing returned an unexpected result."
+                self._fail(RuntimeError(msg))
                 return
 
             filtered_entries = self._filter_entries(

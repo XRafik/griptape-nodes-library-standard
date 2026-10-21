@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import logging
 import re
 from contextlib import suppress
@@ -18,10 +17,12 @@ from griptape_nodes.exe_types.param_types.parameter_dict import ParameterDict
 from griptape_nodes.exe_types.param_types.parameter_image import ParameterImage
 from griptape_nodes.exe_types.param_types.parameter_int import ParameterInt
 from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
+from griptape_nodes.node_library import library_registry
 from griptape_nodes.traits.options import Options
 from griptape_nodes.utils.artifact_normalization import normalize_artifact_list
 
-from griptape_nodes_library.proxy import GriptapeProxyNode
+from griptape_nodes_library.media.public_urls import adelete_uploaded_artifacts, gather_limited
+from griptape_nodes_library.proxy import ArtifactKind, GriptapeProxyNode
 
 logger = logging.getLogger("griptape_nodes")
 
@@ -30,7 +31,20 @@ __all__ = ["OpenAiImageGeneration"]
 GPT_IMAGE_1_MODEL_KEY = "gpt-image-1"
 GPT_IMAGE_1_5_MODEL_KEY = "gpt-image-1.5"
 GPT_IMAGE_2_MODEL_KEY = "gpt-image-2"
-MODEL_CHOICES = [GPT_IMAGE_1_MODEL_KEY, GPT_IMAGE_1_5_MODEL_KEY, GPT_IMAGE_2_MODEL_KEY]
+GPT_IMAGE_2_5_SUNBURST_MODEL_KEY = "gpt-image-2.5-sunburst"
+GPT_IMAGE_2_5_FLARE_MODEL_KEY = "gpt-image-2.5-flare"
+MODEL_CHOICES = [
+    GPT_IMAGE_1_MODEL_KEY,
+    GPT_IMAGE_1_5_MODEL_KEY,
+    GPT_IMAGE_2_MODEL_KEY,
+    GPT_IMAGE_2_5_SUNBURST_MODEL_KEY,
+    GPT_IMAGE_2_5_FLARE_MODEL_KEY,
+]
+# Models sharing GPT Image 2's parameters: flexible sizes (presets or custom WIDTHxHEIGHT)
+# and the same background and reference-image limits.
+GPT_IMAGE_2_FAMILY = frozenset({GPT_IMAGE_2_MODEL_KEY, GPT_IMAGE_2_5_SUNBURST_MODEL_KEY, GPT_IMAGE_2_5_FLARE_MODEL_KEY})
+# The family in dropdown order, for building per-model tables deterministically.
+_GPT_IMAGE_2_FAMILY_ORDERED = [model_key for model_key in MODEL_CHOICES if model_key in GPT_IMAGE_2_FAMILY]
 
 
 class OpenAiImageGeneration(GriptapeProxyNode):
@@ -64,12 +78,12 @@ class OpenAiImageGeneration(GriptapeProxyNode):
     GPT_IMAGE_2_DEFAULT_CUSTOM_HEIGHT: ClassVar[int] = 1024
     QUALITY_OPTIONS: ClassVar[list[str]] = ["low", "medium", "high"]
     BACKGROUND_OPTIONS: ClassVar[list[str]] = ["auto", "opaque", "transparent"]
-    # Only gpt-image-1 supports transparent backgrounds; gpt-image-1.5 and gpt-image-2 reject
-    # background="transparent" at the API level.
+    # Only gpt-image-1 supports transparent backgrounds; gpt-image-1.5 and the gpt-image-2 family
+    # reject background="transparent" at the API level.
     BACKGROUND_OPTIONS_BY_MODEL: ClassVar[dict[str, list[str]]] = {
         GPT_IMAGE_1_MODEL_KEY: ["auto", "opaque", "transparent"],
         GPT_IMAGE_1_5_MODEL_KEY: ["auto", "opaque"],
-        GPT_IMAGE_2_MODEL_KEY: ["auto", "opaque"],
+        **{model_key: ["auto", "opaque"] for model_key in _GPT_IMAGE_2_FAMILY_ORDERED},
     }
     MODERATION_OPTIONS: ClassVar[list[str]] = ["auto", "low"]
     OUTPUT_FORMAT_OPTIONS: ClassVar[list[str]] = ["png", "jpeg", "webp"]
@@ -77,12 +91,12 @@ class OpenAiImageGeneration(GriptapeProxyNode):
     MAX_REFERENCE_IMAGES_BY_MODEL: ClassVar[dict[str, int]] = {
         GPT_IMAGE_1_MODEL_KEY: MAX_REFERENCE_IMAGES,
         GPT_IMAGE_1_5_MODEL_KEY: MAX_REFERENCE_IMAGES,
-        GPT_IMAGE_2_MODEL_KEY: MAX_REFERENCE_IMAGES,
+        **dict.fromkeys(_GPT_IMAGE_2_FAMILY_ORDERED, MAX_REFERENCE_IMAGES),
     }
     MIN_IMAGES: ClassVar[int] = 1
     MAX_IMAGES: ClassVar[int] = 10
     MAX_PROMPT_LENGTH: ClassVar[int] = 32_000
-    DEFAULT_MODEL: ClassVar[str] = GPT_IMAGE_2_MODEL_KEY
+    DEFAULT_MODEL: ClassVar[str] = GPT_IMAGE_2_5_FLARE_MODEL_KEY
     DEFAULT_OUTPUT_FORMAT: ClassVar[str] = "png"
     DEFAULT_OUTPUT_FILENAME_BASE: ClassVar[str] = "openai_image"
     DEFAULT_INPUT_IMAGE_MIME_TYPE: ClassVar[str] = "image/png"
@@ -144,7 +158,7 @@ class OpenAiImageGeneration(GriptapeProxyNode):
         initial_size = initial_size_choices[0]
         is_initial_custom = initial_size == self.GPT_IMAGE_2_CUSTOM_SIZE
         custom_dimension_tooltip = (
-            f"Custom {{dimension}} in pixels for GPT Image 2. Constraints:\n"
+            f"Custom {{dimension}} in pixels. Constraints:\n"
             f"- Snapped automatically to the nearest multiple of {self.GPT_IMAGE_2_EDGE_MULTIPLE}px on entry\n"
             f"- Between {self.GPT_IMAGE_2_EDGE_MULTIPLE} and {self.GPT_IMAGE_2_MAX_EDGE_LENGTH}px\n"
             f"- Aspect ratio of width:height (or height:width) must be {self.GPT_IMAGE_2_MAX_ASPECT_RATIO}:1 or smaller (validated at run time)\n"
@@ -288,7 +302,7 @@ class OpenAiImageGeneration(GriptapeProxyNode):
 
     @classmethod
     def _size_choices_for_model(cls, model_name: str) -> list[str]:
-        if model_name == GPT_IMAGE_2_MODEL_KEY:
+        if model_name in GPT_IMAGE_2_FAMILY:
             return list(cls.GPT_IMAGE_2_SIZE_OPTIONS)
         return list(cls.GPT_IMAGE_SIZE_OPTIONS)
 
@@ -321,10 +335,10 @@ class OpenAiImageGeneration(GriptapeProxyNode):
             self._sync_custom_size_visibility(model_name, current_size)
             return
 
-        # GPT Image 2 accepts any in-range WIDTHxHEIGHT, so don't clobber a custom size.
-        if model_name == GPT_IMAGE_2_MODEL_KEY and isinstance(current_size, str):
+        # The GPT Image 2 family accepts any in-range WIDTHxHEIGHT, so don't clobber a custom size.
+        if model_name in GPT_IMAGE_2_FAMILY and isinstance(current_size, str):
             match = self.GPT_IMAGE_2_SIZE_PATTERN.fullmatch(current_size.strip())
-            if match is not None and not self._validate_gpt_image_2_size(current_size.strip()):
+            if match is not None and not self._validate_gpt_image_2_size(current_size.strip(), model_name):
                 self._sync_custom_size_visibility(model_name, current_size)
                 return
 
@@ -352,7 +366,7 @@ class OpenAiImageGeneration(GriptapeProxyNode):
         self.publish_update_to_parameter("background", choices[0])
 
     def _sync_custom_size_visibility(self, model_name: str, size_value: Any) -> None:
-        show_custom = model_name == GPT_IMAGE_2_MODEL_KEY and size_value == self.GPT_IMAGE_2_CUSTOM_SIZE
+        show_custom = model_name in GPT_IMAGE_2_FAMILY and size_value == self.GPT_IMAGE_2_CUSTOM_SIZE
         for param_name in ("custom_width", "custom_height"):
             if show_custom:
                 self.show_parameter_by_name(param_name)
@@ -459,50 +473,45 @@ class OpenAiImageGeneration(GriptapeProxyNode):
 
         prompt = (self.get_parameter_value("prompt") or "").strip()
         if not prompt:
-            exceptions.append(ValueError(f"{self.name}: Prompt is required for image generation."))
+            exceptions.append(ValueError("'Prompt' is empty. Describe the image you want."))
         elif len(prompt) > self.MAX_PROMPT_LENGTH:
             exceptions.append(
-                ValueError(
-                    f"{self.name}: Prompt must be {self.MAX_PROMPT_LENGTH} characters or fewer for GPT Image generation."
-                )
+                ValueError(f"'Prompt' must be {self.MAX_PROMPT_LENGTH} characters or fewer for GPT Image generation.")
             )
 
         model_name = self.get_parameter_value("model") or self.DEFAULT_MODEL
         size = self._resolve_effective_size()
         if not size:
-            exceptions.append(ValueError(f"{self.name}: Size is required for image generation."))
+            exceptions.append(ValueError("'Size' is empty. Choose an image size."))
         elif model_name in {GPT_IMAGE_1_MODEL_KEY, GPT_IMAGE_1_5_MODEL_KEY} and size not in self.GPT_IMAGE_SIZE_OPTIONS:
             valid_sizes = ", ".join(self.GPT_IMAGE_SIZE_OPTIONS)
             display_name = "GPT Image 1" if model_name == GPT_IMAGE_1_MODEL_KEY else "GPT Image 1.5"
-            exceptions.append(ValueError(f"{self.name}: {display_name} size must be one of: {valid_sizes}."))
-        elif model_name == GPT_IMAGE_2_MODEL_KEY:
-            exceptions.extend(self._validate_gpt_image_2_size(size))
+            exceptions.append(ValueError(f"{display_name} size must be one of: {valid_sizes}."))
+        elif model_name in GPT_IMAGE_2_FAMILY:
+            exceptions.extend(self._validate_gpt_image_2_size(size, model_name))
 
         input_images = self._get_input_images_value()
         max_reference_images = self.MAX_REFERENCE_IMAGES_BY_MODEL.get(model_name, self.MAX_REFERENCE_IMAGES)
         if len(input_images) > max_reference_images:
             exceptions.append(
                 ValueError(
-                    f"{self.name}: this model supports up to {max_reference_images} reference images; "
-                    f"received {len(input_images)}."
+                    f"This model supports up to {max_reference_images} reference images; received {len(input_images)}."
                 )
             )
 
         n_value = self.get_parameter_value("n")
         if n_value is None or not self.MIN_IMAGES <= int(n_value) <= self.MAX_IMAGES:
-            exceptions.append(ValueError(f"{self.name}: n must be between {self.MIN_IMAGES} and {self.MAX_IMAGES}."))
+            exceptions.append(ValueError(f"'n' must be between {self.MIN_IMAGES} and {self.MAX_IMAGES}."))
 
         output_format = self.get_parameter_value("output_format") or self.DEFAULT_OUTPUT_FORMAT
         background = self.get_parameter_value("background") or "auto"
         if background == "transparent" and output_format not in {"png", "webp"}:
-            exceptions.append(
-                ValueError(f"{self.name}: Transparent backgrounds require output_format to be png or webp.")
-            )
+            exceptions.append(ValueError("Transparent backgrounds require output_format to be png or webp."))
 
         if output_format in {"jpeg", "webp"}:
             output_compression = self.get_parameter_value("output_compression")
             if output_compression is None or not 0 <= int(output_compression) <= 100:
-                exceptions.append(ValueError(f"{self.name}: output_compression must be between 0 and 100."))
+                exceptions.append(ValueError("output_compression must be between 0 and 100."))
 
         return exceptions if exceptions else None
 
@@ -513,12 +522,15 @@ class OpenAiImageGeneration(GriptapeProxyNode):
         finally:
             # Delete each uploaded reference and remove its scratch parameter. The scratch name is
             # unique per upload, so leaving it would accumulate parameters on the node across runs.
-            for helper, scratch_name in self._pending_reference_uploads:
-                with suppress(Exception):
-                    helper.delete_uploaded_artifact()
+            pending = self._pending_reference_uploads
+            self._pending_reference_uploads = []
+            # Scratch parameters go first, because a second cancel can cut the awaited deletes short.
+            for _, scratch_name in pending:
                 with suppress(Exception):
                     self.remove_parameter_element_by_name(scratch_name)
-            self._pending_reference_uploads = []
+                # Removing the parameter leaves its value behind, which the next run would replay.
+                self.parameter_values.pop(scratch_name, None)
+            await adelete_uploaded_artifacts((helper for helper, _ in pending), node_name=self.name)
 
     async def _build_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -541,42 +553,64 @@ class OpenAiImageGeneration(GriptapeProxyNode):
 
         return payload
 
-    async def _parse_result(self, result_json: dict[str, Any], generation_id: str) -> None:
-        data = result_json.get("data", [])
-        if not data:
+    async def _parse_result(self, _result_json: dict[str, Any], generation_id: str) -> None:
+        try:
+            hosted = [a for a in await self._hosted_artifacts(generation_id) if a.kind == ArtifactKind.IMAGE]
+        except Exception as e:
             self._set_safe_defaults()
             self._set_status_results(
                 was_successful=False,
-                result_details=f"{self.name} generation completed but no image data was found in the response.",
+                result_details=f"The generation finished, but its images could not be listed: {e}",
             )
             return
 
-        image_artifacts: list[ImageUrlArtifact] = []
-        for idx, image_data in enumerate(data, start=1):
-            b64_json = image_data.get("b64_json")
-            if not isinstance(b64_json, str) or not b64_json:
-                logger.warning("%s response item %s did not include b64_json", self.name, idx)
+        if not hosted:
+            self._set_safe_defaults()
+            self._set_status_results(
+                was_successful=False,
+                result_details="The generation finished, but no images were hosted.",
+            )
+            return
+
+        # Slots follow provider order: a failed download leaves its slot empty instead of
+        # pulling later images forward, so image_url_N always holds the Nth hosted image.
+        saved_by_position: list[ImageUrlArtifact | None] = []
+        for position in range(len(hosted)):
+            try:
+                image_bytes = await self._load_generated_media(
+                    generation_id, kind=ArtifactKind.IMAGE, position=position
+                )
+                dest = self._output_file.build_file(_index=position + 1)
+                saved = await dest.awrite_bytes(image_bytes)
+            except Exception as e:
+                logger.warning("%s failed to save generated image %s: %s", self.name, position + 1, e)
+                saved_by_position.append(None)
                 continue
+            saved_by_position.append(ImageUrlArtifact(value=saved.location, name=saved.name))
 
-            artifact = await self._save_single_image_from_base64(b64_json, index=idx)
-            if artifact is not None:
-                image_artifacts.append(artifact)
-
+        image_artifacts = [artifact for artifact in saved_by_position if artifact is not None]
         if not image_artifacts:
             self._set_safe_defaults()
             self._set_status_results(
                 was_successful=False,
-                result_details=f"{self.name} generation completed but no decodable GPT image payloads were found.",
+                result_details="The generation finished, but the image(s) could not be retrieved.",
             )
             return
 
-        self._show_image_output_parameters(len(image_artifacts))
-        for idx, artifact in enumerate(image_artifacts, start=1):
+        self._show_image_output_parameters(len(saved_by_position))
+        for idx, artifact in enumerate(saved_by_position, start=1):
             param_name = "image_url" if idx == 1 else f"image_url_{idx}"
             self.parameter_output_values[param_name] = artifact
 
         filenames = [artifact.name for artifact in image_artifacts if artifact.name]
-        if len(image_artifacts) == 1:
+        missing = [str(idx) for idx, artifact in enumerate(saved_by_position, start=1) if artifact is None]
+        if missing:
+            saved_list = f": {', '.join(filenames)}" if filenames else ""
+            details = (
+                f"Saved {len(image_artifacts)} of {len(saved_by_position)} images{saved_list}. "
+                f"Image(s) {', '.join(missing)} could not be retrieved; their output slots are empty."
+            )
+        elif len(image_artifacts) == 1:
             details = f"Image generated successfully and saved as {filenames[0] if filenames else generation_id}."
         else:
             details = (
@@ -592,44 +626,30 @@ class OpenAiImageGeneration(GriptapeProxyNode):
             param_name = "image_url" if i == 1 else f"image_url_{i}"
             self.parameter_output_values[param_name] = None
 
-    async def _save_single_image_from_base64(self, b64_json: str, *, index: int) -> ImageUrlArtifact | None:
-        try:
-            image_bytes = base64.b64decode(b64_json)
-            dest = self._output_file.build_file(_index=index)
-            saved = await dest.awrite_bytes(image_bytes)
-            return ImageUrlArtifact(value=saved.location, name=saved.name)
-        except Exception as e:
-            logger.warning("%s failed to save generated image %s: %s", self.name, index, e)
-            return None
-
     async def _build_input_images_payload(self) -> list[dict[str, str]]:
         input_images = self._get_input_images_value()
-        image_references: list[dict[str, str]] = []
-
-        for image_input in input_images:
-            image_url = await self._process_input_image(image_input)
-            image_references.append({"image_url": image_url})
-
-        return image_references
+        image_urls = await gather_limited(self._process_input_image(image_input) for image_input in input_images)
+        return [{"image_url": image_url} for image_url in image_urls]
 
     async def _process_input_image(self, image_input: Any) -> str:
         if not image_input:
-            raise ValueError(f"{self.name}: Input image cannot be empty.")
+            raise ValueError("An item in 'Input Images' is empty. Remove it or connect an image.")
 
         image_value = self._extract_input_image_value(image_input)
         if not image_value:
-            raise ValueError(f"{self.name}: Input image must be a file path, URL, data URI, or image artifact.")
+            raise ValueError("Each input image must be a file path, URL, data URI, or image artifact.")
 
         # Upload the reference to Griptape Cloud and pass the proxy a public URL instead of
         # base64-inlining the bytes. Base64 inflates the payload ~33%, so a couple of large
         # references can exceed the proxy's request-body cap; a URL keeps the body tiny.
         try:
-            return self._resolve_public_url_for_reference(image_value)
+            return await self._resolve_public_url_for_reference(image_value)
         except Exception as e:
-            msg = f"{self.name}: Failed to prepare input image {image_input!r}: {e}"
+            source = "(inline image data)" if image_value.startswith("data:") else image_value
+            msg = f"Failed to prepare input image {source}: {e}"
             raise ValueError(msg) from e
 
-    def _resolve_public_url_for_reference(self, image_value: str) -> str:
+    async def _resolve_public_url_for_reference(self, image_value: str) -> str:
         """Return a publicly fetchable URL for a reference image.
 
         Already-public http(s) URLs pass through unchanged. Everything else — local paths, data
@@ -661,9 +681,7 @@ class OpenAiImageGeneration(GriptapeProxyNode):
         self._pending_reference_uploads.append((helper, scratch_name))
         self.set_parameter_value(scratch_name, image_value)
 
-        # Must run on the aprocess event loop, not a worker thread: the upload resolves macro paths
-        # (e.g. "{inputs}/...") via GriptapeNodes.handle_request, which needs the node's project context.
-        return helper.get_public_url_for_parameter()
+        return await helper.aget_public_url_for_parameter()
 
     def _extract_input_image_value(self, image_input: Any) -> str | None:
         if isinstance(image_input, str):
@@ -695,16 +713,25 @@ class OpenAiImageGeneration(GriptapeProxyNode):
 
         return normalize_artifact_list(input_images, ImageUrlArtifact, accepted_types=(ImageArtifact,))
 
-    def _validate_gpt_image_2_size(self, size: str) -> list[ValueError]:
+    def _model_display_name(self, model_name: str) -> str:
+        """Return the catalog display name for a provider model id, falling back to the id itself."""
+        display_names = {
+            resolved.model.display_name
+            for resolved in library_registry.get_declared_models(self)
+            if resolved.model.provider_model_id == model_name
+        }
+        return display_names.pop() if len(display_names) == 1 else model_name
+
+    def _validate_gpt_image_2_size(self, size: str, model_name: str) -> list[ValueError]:
         if size == "auto":
             return []
+
+        display_name = self._model_display_name(model_name)
 
         match = self.GPT_IMAGE_2_SIZE_PATTERN.fullmatch(size)
         if match is None:
             return [
-                ValueError(
-                    f"{self.name}: GPT Image 2 size must be 'auto' or formatted as WIDTHxHEIGHT, for example 2048x1152."
-                )
+                ValueError(f"{display_name} size must be 'auto' or formatted as WIDTHxHEIGHT, for example 2048x1152.")
             ]
 
         width = int(match.group("width"))
@@ -713,15 +740,13 @@ class OpenAiImageGeneration(GriptapeProxyNode):
 
         if max(width, height) > self.GPT_IMAGE_2_MAX_EDGE_LENGTH:
             exceptions.append(
-                ValueError(
-                    f"{self.name}: GPT Image 2 size edge lengths must be {self.GPT_IMAGE_2_MAX_EDGE_LENGTH}px or less."
-                )
+                ValueError(f"{display_name} size edge lengths must be {self.GPT_IMAGE_2_MAX_EDGE_LENGTH}px or less.")
             )
 
         if width % self.GPT_IMAGE_2_EDGE_MULTIPLE != 0 or height % self.GPT_IMAGE_2_EDGE_MULTIPLE != 0:
             exceptions.append(
                 ValueError(
-                    f"{self.name}: GPT Image 2 size width and height must both be multiples of "
+                    f"{display_name} size width and height must both be multiples of "
                     f"{self.GPT_IMAGE_2_EDGE_MULTIPLE}px."
                 )
             )
@@ -730,16 +755,14 @@ class OpenAiImageGeneration(GriptapeProxyNode):
         short_edge = min(width, height)
         if short_edge == 0 or long_edge > short_edge * self.GPT_IMAGE_2_MAX_ASPECT_RATIO:
             exceptions.append(
-                ValueError(
-                    f"{self.name}: GPT Image 2 size aspect ratio cannot exceed {self.GPT_IMAGE_2_MAX_ASPECT_RATIO}:1."
-                )
+                ValueError(f"{display_name} size aspect ratio cannot exceed {self.GPT_IMAGE_2_MAX_ASPECT_RATIO}:1.")
             )
 
         total_pixels = width * height
         if not self.GPT_IMAGE_2_MIN_PIXELS <= total_pixels <= self.GPT_IMAGE_2_MAX_PIXELS:
             exceptions.append(
                 ValueError(
-                    f"{self.name}: GPT Image 2 size total pixels must be between "
+                    f"{display_name} size total pixels must be between "
                     f"{self.GPT_IMAGE_2_MIN_PIXELS:,} and {self.GPT_IMAGE_2_MAX_PIXELS:,}."
                 )
             )

@@ -6,8 +6,7 @@ import logging
 from typing import Any
 
 from griptape_nodes.exe_types.core_types import Parameter, ParameterMode, ParameterTypeBuiltin
-from griptape_nodes.exe_types.node_groups.base_while_node_group import BaseWhileNodeGroup
-from griptape_nodes.exe_types.node_groups.subflow_node_group import RIGHT_PARAMETERS_KEY
+from griptape_nodes.exe_types.node_groups import RIGHT_PARAMETERS_KEY, BaseWhileNodeGroup
 
 logger = logging.getLogger("griptape_nodes")
 
@@ -50,7 +49,7 @@ class RetryGroupNode(BaseWhileNodeGroup):
             default_value=False,
         )
         self.add_parameter(self.was_successful)
-        self.metadata[RIGHT_PARAMETERS_KEY].append("was_successful")
+        self._register_side_parameter(RIGHT_PARAMETERS_KEY, self.was_successful.name)
 
         self.raise_on_failure = Parameter(
             name="raise_on_failure",
@@ -67,12 +66,14 @@ class RetryGroupNode(BaseWhileNodeGroup):
         self.add_parameter_to_group_settings(self.max_iterations)
         self.add_parameter_to_group_settings(self.raise_on_failure)
 
-    def _before_loop_iteration(self, iteration: int) -> None:
+    def _before_loop_iteration(self, iteration: int, flow_name: str) -> None:
         """Called before each retry attempt.
 
         Args:
             iteration: The upcoming attempt number (0-based, so 1 means first retry)
+            flow_name: Name of the flow holding the group's nodes for this run
         """
+        super()._before_loop_iteration(iteration, flow_name)
         logger.info(
             "Retry Group '%s': retrying (attempt %d of %d)",
             self.name,
@@ -97,5 +98,5 @@ class RetryGroupNode(BaseWhileNodeGroup):
         if not raise_on_failure:
             return
 
-        msg = f"Retry Group '{self.name}' failed after {iterations} attempt(s)"
+        msg = f"Failed after {iterations} attempt(s)."
         raise RuntimeError(msg)

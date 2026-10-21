@@ -16,7 +16,8 @@ from griptape_nodes.exe_types.param_types.parameter_string import ParameterStrin
 from griptape_nodes.exe_types.param_types.parameter_video import ParameterVideo
 from griptape_nodes.traits.options import Options
 
-from griptape_nodes_library.proxy import GriptapeProxyNode
+from griptape_nodes_library.media.public_urls import adelete_uploaded_artifacts, gather_limited
+from griptape_nodes_library.proxy import ArtifactKind, GriptapeProxyNode
 
 logger = logging.getLogger("griptape_nodes")
 
@@ -169,8 +170,9 @@ class KlingMotionControl(GriptapeProxyNode):
             await super().aprocess()
         finally:
             # Always cleanup uploaded artifacts
-            self._public_image_url_parameter.delete_uploaded_artifact()
-            self._public_video_url_parameter.delete_uploaded_artifact()
+            await adelete_uploaded_artifacts(
+                (self._public_image_url_parameter, self._public_video_url_parameter), node_name=self.name
+            )
 
     def _get_api_model_id(self) -> str:
         """Get the API model ID for this generation.
@@ -179,6 +181,11 @@ class KlingMotionControl(GriptapeProxyNode):
         """
         return "kling:motion-control"
 
+    async def _upload_reference(self, parameter_name: str, helper: PublicArtifactUrlParameter) -> str | None:
+        if not self.get_parameter_value(parameter_name):
+            return None
+        return await helper.aget_public_url_for_parameter()
+
     async def _build_payload(self) -> dict[str, Any]:
         """Build the request payload for Kling Motion Control API.
 
@@ -186,16 +193,12 @@ class KlingMotionControl(GriptapeProxyNode):
             dict: The request payload (model field excluded, handled by base class)
         """
         # Get image parameter - use PublicArtifactUrlParameter to get public URL
-        reference_image_param = self.get_parameter_value("reference_image")
-        image_url = None
-        if reference_image_param:
-            image_url = self._public_image_url_parameter.get_public_url_for_parameter()
-
-        # Get video parameter - use PublicArtifactUrlParameter to get public URL
-        reference_video_param = self.get_parameter_value("reference_video")
-        video_url = None
-        if reference_video_param:
-            video_url = self._public_video_url_parameter.get_public_url_for_parameter()
+        image_url, video_url = await gather_limited(
+            [
+                self._upload_reference("reference_image", self._public_image_url_parameter),
+                self._upload_reference("reference_video", self._public_video_url_parameter),
+            ]
+        )
 
         keep_sound = self.get_parameter_value("keep_original_sound")
         if keep_sound is None:
@@ -221,41 +224,22 @@ class KlingMotionControl(GriptapeProxyNode):
         return payload
 
     async def _parse_result(self, result_json: dict[str, Any], generation_id: str) -> None:
-        """Parse the result and set output parameters.
+        """Save the hosted video and record Kling's own id for it.
 
-        Expected structure: {"data": {"task_result": {"videos": [{"url": "...", "id": "..."}]}}}
+        Kling reports the id under {"data": {"task_result": {"videos": [{"id": "..."}]}}}.
         """
-        data = result_json.get("data", {})
-        task_result = data.get("task_result", {})
-        videos = task_result.get("videos", [])
-
-        if not videos or not isinstance(videos, list) or len(videos) == 0:
-            self.parameter_output_values["video_url"] = None
-            self._set_status_results(
-                was_successful=False,
-                result_details=f"{self.name} generation completed but no videos found in response.",
-            )
-            return
-
-        video_info = videos[0]
-        download_url = video_info.get("url")
-        video_id = video_info.get("id")
-
-        if not download_url:
-            self.parameter_output_values["video_url"] = None
-            self._set_status_results(
-                was_successful=False,
-                result_details=f"{self.name} generation completed but no download URL found in response.",
-            )
-            return
-
-        # Set kling_video_id output parameter
+        videos = result_json.get("data", {}).get("task_result", {}).get("videos", [])
+        video_id = videos[0].get("id") if videos and isinstance(videos[0], dict) else None
         if video_id:
             self.parameter_output_values["kling_video_id"] = video_id
             logger.info("Video ID: %s", video_id)
 
-        # Download and save video
-        await self._download_and_save(download_url, "video_url", lambda v, n: VideoUrlArtifact(value=v, name=n))
+        await self._save_generated_media(
+            generation_id,
+            "video_url",
+            lambda v, n: VideoUrlArtifact(value=v, name=n),
+            kind=ArtifactKind.VIDEO,
+        )
 
     def _set_safe_defaults(self) -> None:
         """Clear output parameters on error."""
@@ -274,17 +258,15 @@ class KlingMotionControl(GriptapeProxyNode):
         # Validate prompt length
         if prompt and len(prompt) > MAX_PROMPT_LENGTH:
             exceptions.append(
-                ValueError(
-                    f"{self.name} prompt exceeds {MAX_PROMPT_LENGTH} characters (got: {len(prompt)} characters)."
-                )
+                ValueError(f"'prompt' exceeds {MAX_PROMPT_LENGTH} characters (got: {len(prompt)} characters).")
             )
 
         # Validate required image
         if not reference_image_param:
-            exceptions.append(ValueError(f"{self.name} requires a reference image."))
+            exceptions.append(ValueError("A reference image is required. Connect one to 'reference_image'."))
 
         # Validate required video
         if not reference_video_param:
-            exceptions.append(ValueError(f"{self.name} requires a reference video."))
+            exceptions.append(ValueError("A reference video is required. Connect one to 'reference_video'."))
 
         return exceptions if exceptions else None

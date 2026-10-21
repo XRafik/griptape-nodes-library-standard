@@ -211,7 +211,7 @@ def test_percentage_outside_the_slider_range_is_rejected(value: int) -> None:
     """Slider validates rather than clamping, so an out-of-range percentage surfaces instead of silently becoming 500."""
     node = _node()
 
-    with pytest.raises(ValueError, match="out of range"):
+    with pytest.raises(ValueError, match=f"between {MIN_PERCENTAGE_SCALE} and {MAX_PERCENTAGE_SCALE}"):
         node.set_parameter_value("percentage", value)
 
 
@@ -229,7 +229,7 @@ async def test_source_dependent_modes_raise_when_the_source_cannot_be_read(
     node.set_parameter_value("output_width", 2000)
     node.set_parameter_value("output_height", 1500)
 
-    with pytest.raises(ValueError, match="could not read the source image"):
+    with pytest.raises(ValueError, match="Could not read the source image"):
         await node._build_payload()
 
 

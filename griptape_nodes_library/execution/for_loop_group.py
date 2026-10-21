@@ -10,8 +10,7 @@ from griptape_nodes.exe_types.core_types import (
     ParameterMode,
     ParameterTypeBuiltin,
 )
-from griptape_nodes.exe_types.node_groups import BaseIterativeNodeGroup
-from griptape_nodes.exe_types.node_groups.subflow_node_group import LEFT_PARAMETERS_KEY
+from griptape_nodes.exe_types.node_groups import LEFT_PARAMETERS_KEY, BaseIterativeNodeGroup
 from griptape_nodes.traits.clamp import Clamp
 
 logger = logging.getLogger("griptape_nodes")
@@ -86,12 +85,12 @@ class ForLoopGroupNode(BaseIterativeNodeGroup):
         self.step_value.add_trait(Clamp(min_val=1, max_val=1000))
         self.add_parameter(self.step_value)
 
-        # Register start/end/step on the left rail, after exec_in, before index
-        left = self.metadata.setdefault(LEFT_PARAMETERS_KEY, [])
-        insert_at = left.index("exec_in") + 1 if "exec_in" in left else 0
-        for name in ("start", "end", "step"):
-            left.insert(insert_at, name)
-            insert_at += 1
+        # Record start/end/step as belonging on the left rail. The rail list is an unordered
+        # membership set — visual order comes from the physical parameter order set below, and
+        # control ports are pinned to the top of the rail by parameter type.
+        self._register_side_parameter(LEFT_PARAMETERS_KEY, self.start_value.name)
+        self._register_side_parameter(LEFT_PARAMETERS_KEY, self.end_value.name)
+        self._register_side_parameter(LEFT_PARAMETERS_KEY, self.step_value.name)
 
         self.move_element_to_position("start", 0)
         self.move_element_to_position("end", 1)
@@ -178,7 +177,7 @@ class ForLoopGroupNode(BaseIterativeNodeGroup):
         end_inclusive = self.get_parameter_value("end_inclusive")
 
         if step < 1:
-            msg = f"{self.name}: Step value must be positive (>= 1), got {step}"
+            msg = f"'Step' must be 1 or more, got {step}."
             exceptions.append(Exception(msg))
 
         if start == end:

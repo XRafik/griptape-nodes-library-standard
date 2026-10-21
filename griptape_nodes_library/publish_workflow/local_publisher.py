@@ -113,6 +113,7 @@ class LocalPublisher:
     def _write_entrypoint(self, destination: Path, workflow_file_name: str) -> None:
         content = f"""\
 import os
+import runpy
 import sys
 from pathlib import Path
 
@@ -132,16 +133,16 @@ os.environ["GTN_ENABLE_WORKSPACE_FILE_WATCHING"] = "false"
 if "--project-file-path" not in sys.argv:
     sys.argv.extend(["--project-file-path", str(script_dir / "project.yml")])
 
-# Forward to the workflow script
+# Run the workflow as __main__ in a fresh namespace so registration uses the
+# workflow's own __file__.
 sys.argv[0] = str(script_dir / "{workflow_file_name}")
-exec(open(sys.argv[0]).read())
+runpy.run_path(sys.argv[0], run_name="__main__")
 """
         result = GriptapeNodes.handle_request(
             WriteFileRequest(file_path=str(destination / "run.py"), content=content, encoding="utf-8")
         )
         if not isinstance(result, WriteFileResultSuccess):
             msg = f"Failed to write run.py entrypoint to '{destination}'."
-            logger.error(msg)
             raise TypeError(msg)
 
     def _write_readme(self, destination: Path) -> None:
@@ -184,5 +185,4 @@ uv export --no-hashes --no-dev -o requirements.txt
         )
         if not isinstance(result, WriteFileResultSuccess):
             msg = f"Failed to write README.md to '{destination}'."
-            logger.error(msg)
             raise TypeError(msg)

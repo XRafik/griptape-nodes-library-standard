@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
@@ -32,10 +31,10 @@ from griptape_nodes_library.assets import (
     get_provider_asset_kind,
     is_provider_asset_reference,
 )
+from griptape_nodes_library.proxy import ArtifactKind
 from griptape_nodes_library.video.seedance_common import (
     SeedanceProxyNode,
     coerce_video_url,
-    extract_video_url,
 )
 
 logger = logging.getLogger("griptape_nodes")
@@ -512,17 +511,13 @@ class Seedance20VideoGeneration(SeedanceProxyNode):
         try:
             await super()._process_generation()
         finally:
-            # Each delete is a network call, so one failing must not skip the rest of the teardown:
-            # _pending_asset_uploads is reset at the top of the next run, so a skipped cleanup strands
-            # its scratch parameters on the node permanently and leaks the uploaded objects.
-            for reference_video_parameter in (
-                self._public_reference_video_parameter_1,
-                self._public_reference_video_parameter_2,
-                self._public_reference_video_parameter_3,
-            ):
-                with suppress(Exception):
-                    reference_video_parameter.delete_uploaded_artifact()
-            self._cleanup_pending_asset_uploads()
+            await self._cleanup_pending_asset_uploads(
+                (
+                    self._public_reference_video_parameter_1,
+                    self._public_reference_video_parameter_2,
+                    self._public_reference_video_parameter_3,
+                )
+            )
 
     def validate_before_node_run(self) -> list[Exception] | None:
         """Validate parameters before execution."""
@@ -600,7 +595,7 @@ class Seedance20VideoGeneration(SeedanceProxyNode):
         if input_mode == INPUT_MODE_TEXT_ONLY:
             if has_any_media:
                 msg = (
-                    f"{self.name}: {INPUT_MODE_TEXT_ONLY} mode does not accept any media inputs. "
+                    f"{INPUT_MODE_TEXT_ONLY} mode does not accept any media inputs. "
                     f"Switch to {INPUT_MODE_FIRST_LAST_FRAME} or {INPUT_MODE_MULTIMODAL_REFERENCES} mode, "
                     "or clear all media inputs."
                 )
@@ -610,7 +605,7 @@ class Seedance20VideoGeneration(SeedanceProxyNode):
         elif input_mode == INPUT_MODE_FIRST_LAST_FRAME:
             if has_reference_images or has_reference_videos or has_reference_audio:
                 msg = (
-                    f"{self.name}: reference_images/reference_video_1/reference_video_2/reference_video_3/reference_audio are only used in "
+                    f"reference_images/reference_video_1/reference_video_2/reference_video_3/reference_audio are only used in "
                     f"{INPUT_MODE_MULTIMODAL_REFERENCES} mode. Switch input_mode to {INPUT_MODE_MULTIMODAL_REFERENCES} "
                     "or clear the multimodal reference inputs."
                 )
@@ -618,7 +613,7 @@ class Seedance20VideoGeneration(SeedanceProxyNode):
 
             if params.get("last_frame") and not self._supports_last_frame(params["model_id"]):
                 msg = (
-                    f"{self.name}: the selected model does not support a last frame. "
+                    "The selected model does not support a last frame. "
                     "Use first_frame only, or switch to a model that supports first+last frame generation."
                 )
                 raise ValueError(msg)
@@ -627,7 +622,7 @@ class Seedance20VideoGeneration(SeedanceProxyNode):
         elif input_mode == INPUT_MODE_MULTIMODAL_REFERENCES:
             if has_first_frame or has_last_frame:
                 msg = (
-                    f"{self.name}: first_frame/last_frame inputs are only used in {INPUT_MODE_FIRST_LAST_FRAME} mode. "
+                    f"first_frame/last_frame inputs are only used in {INPUT_MODE_FIRST_LAST_FRAME} mode. "
                     f"Switch input_mode to {INPUT_MODE_FIRST_LAST_FRAME} or clear the frame inputs."
                 )
                 raise ValueError(msg)
@@ -637,39 +632,39 @@ class Seedance20VideoGeneration(SeedanceProxyNode):
             # Audio requires at least one image or video
             if has_reference_audio and not (has_reference_images or has_reference_videos):
                 msg = (
-                    f"{self.name}: Seedance 2.0 requires at least one reference image or video when using audio. "
+                    "Seedance 2.0 requires at least one reference image or video when using audio. "
                     "Audio cannot be used alone."
                 )
                 raise ValueError(msg)
 
             # Validate counts
             if has_reference_images and len(params["reference_images"]) > 9:
-                msg = f"{self.name}: Seedance 2.0 supports up to 9 reference images, got {len(params['reference_images'])}."
+                msg = f"Seedance 2.0 supports up to 9 reference images, got {len(params['reference_images'])}."
                 raise ValueError(msg)
 
             if params.get("reference_video_2") and not params.get("reference_video_1"):
-                msg = f"{self.name}: reference_video_2 requires reference_video_1 to be set first."
+                msg = "reference_video_2 requires reference_video_1 to be set first."
                 raise ValueError(msg)
 
             if params.get("reference_video_3") and not params.get("reference_video_2"):
-                msg = f"{self.name}: reference_video_3 requires reference_video_2 to be set first."
+                msg = "reference_video_3 requires reference_video_2 to be set first."
                 raise ValueError(msg)
 
             if has_reference_audio and len(params["reference_audio"]) > 3:
-                msg = f"{self.name}: Seedance 2.0 supports up to 3 reference audio files, got {len(params['reference_audio'])}."
+                msg = f"Seedance 2.0 supports up to 3 reference audio files, got {len(params['reference_audio'])}."
                 raise ValueError(msg)
 
         # Validate duration range (4-15 or -1)
         duration = params.get("duration")
         if duration is not None and duration != -1 and not (4 <= duration <= 15):
-            msg = f"{self.name}: Seedance 2.0 supports duration between 4-15 seconds or -1 for smart selection, got {duration}."
+            msg = f"Seedance 2.0 supports duration between 4-15 seconds or -1 for smart selection, got {duration}."
             raise ValueError(msg)
 
         # 1080p is only supported on Seedance 2.0 (not Fast or Mini)
         if params.get("resolution") == "1080p" and not self._supports_1080p(params["model_id"]):
             supported = ", ".join(_get_model_capabilities(params["model_id"]).resolutions)
             msg = (
-                f"{self.name}: the selected model does not support 1080p resolution "
+                f"The selected model does not support 1080p resolution "
                 f"(supported: {supported}). Use a supported resolution, or switch to Seedance 2.0 for 1080p generation."
             )
             raise ValueError(msg)
@@ -678,7 +673,7 @@ class Seedance20VideoGeneration(SeedanceProxyNode):
         if params.get("resolution") == "4k" and not self._supports_4k(params["model_id"]):
             supported = ", ".join(_get_model_capabilities(params["model_id"]).resolutions)
             msg = (
-                f"{self.name}: the selected model does not support 4k resolution "
+                f"The selected model does not support 4k resolution "
                 f"(supported: {supported}). Use a supported resolution, or switch to Seedance 2.0 for 4k generation."
             )
             raise ValueError(msg)
@@ -713,7 +708,7 @@ class Seedance20VideoGeneration(SeedanceProxyNode):
         for value, _ in self._iter_reference_asset_checks(params):
             if is_provider_asset_reference(value):
                 msg = (
-                    f"{self.name}: the selected model does not support private-asset references "
+                    "The selected model does not support private-asset references "
                     "(Seedance Human Reference Asset). Switch to a model that supports them, or remove the "
                     "private-asset reference inputs."
                 )
@@ -730,7 +725,7 @@ class Seedance20VideoGeneration(SeedanceProxyNode):
         for value, _ in self._iter_reference_asset_checks(params):
             if is_provider_asset_reference(value):
                 msg = (
-                    f"{self.name}: private-asset references (Seedance Human Reference Asset) require "
+                    "Private-asset references (Seedance Human Reference Asset) require "
                     "Griptape authentication and are not available when using your own provider key. "
                     "Switch off the customer key option, or remove the private-asset reference inputs."
                 )
@@ -743,7 +738,7 @@ class Seedance20VideoGeneration(SeedanceProxyNode):
                 actual_kind = get_provider_asset_kind(value)
                 if actual_kind != expected_kind:
                     msg = (
-                        f"{self.name}: a {actual_kind or 'unknown'} private-asset reference is connected to a "
+                        f"A {actual_kind or 'unknown'} private-asset reference is connected to a "
                         f"{expected_kind} reference input. Set the Seedance Human Reference Asset's Asset Kind "
                         f"to {expected_kind}, or connect it to the matching reference input."
                     )
@@ -828,10 +823,10 @@ class Seedance20VideoGeneration(SeedanceProxyNode):
                     )
                     order_log.append(f"Video {idx}: private asset")
                 else:
-                    video_url = self._get_reference_video_url(ref_video["parameter_name"], value)
+                    video_url = await self._get_reference_video_url(ref_video["parameter_name"], value)
                     if not video_url:
                         msg = (
-                            f"{self.name}: {ref_video['parameter_name']} only supports public URLs, uploaded asset URLs, "
+                            f"{ref_video['parameter_name']} only supports public URLs, uploaded asset URLs, "
                             "or asset:// IDs. Seedance 2.0 does not accept video base64."
                         )
                         raise ValueError(msg)
@@ -877,19 +872,14 @@ class Seedance20VideoGeneration(SeedanceProxyNode):
             # Text Only mode: no media inputs
             self._log(f"{self.name} text-only mode, no media inputs")
 
-    async def _parse_result(self, result_json: dict[str, Any], generation_id: str) -> None:
-        """Parse the result and set output parameters."""
-        extracted_url = extract_video_url(result_json)
-        if not extracted_url:
-            self.parameter_output_values["video_url"] = None
-            self._set_status_results(
-                was_successful=False,
-                result_details=f"{self.name} generation completed but no video URL was found in the response.",
-            )
-            return
-
-        # Download and save video
-        await self._download_and_save(extracted_url, "video_url", lambda v, n: VideoUrlArtifact(value=v, name=n))
+    async def _parse_result(self, _result_json: dict[str, Any], generation_id: str) -> None:
+        """Save the hosted video."""
+        await self._save_generated_media(
+            generation_id,
+            "video_url",
+            lambda v, n: VideoUrlArtifact(value=v, name=n),
+            kind=ArtifactKind.VIDEO,
+        )
 
     def _set_safe_defaults(self) -> None:
         """Clear all output parameters on error."""
@@ -904,7 +894,7 @@ class Seedance20VideoGeneration(SeedanceProxyNode):
             if params.get(parameter_name)
         ]
 
-    def _get_reference_video_url(self, parameter_name: str, value: Any) -> str | None:
+    async def _get_reference_video_url(self, parameter_name: str, value: Any) -> str | None:
         direct_url = coerce_video_url(value)
         if direct_url:
             return direct_url
@@ -919,7 +909,7 @@ class Seedance20VideoGeneration(SeedanceProxyNode):
             return None
 
         try:
-            public_url = helper.get_public_url_for_parameter()
+            public_url = await helper.aget_public_url_for_parameter()
         except Exception as e:
             self._log(f"{self.name} failed to prepare public URL for {parameter_name}: {e}")
             return None
