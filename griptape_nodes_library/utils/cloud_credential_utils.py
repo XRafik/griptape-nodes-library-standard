@@ -30,10 +30,9 @@ from griptape_nodes.drivers.cloud_credentials import (
     LICENSE_SECRET_NAME,
     MISSING_CREDENTIAL_MESSAGE,
 )
-from griptape_nodes.retained_mode.events.secrets_events import GetSecretValueRequest, GetSecretValueResultSuccess
-from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 
 from griptape_nodes_library.utils.node_error_utils import MissingSecretError, secret_link
+from griptape_nodes_library.utils.secret_utils import get_secret
 
 __all__ = [
     "MISSING_CREDENTIAL_MESSAGE",
@@ -52,14 +51,8 @@ class MissingCredentialError(MissingSecretError):
 
 
 def _get_secret(secret_name: str) -> str | None:
-    """Read a secret by key, None if unset.
-
-    A request, not GriptapeNodes.SecretsManager(), so this resolves correctly from a worker process.
-    """
-    result = GriptapeNodes.handle_request(
-        GetSecretValueRequest(key=secret_name, should_error_on_not_found=False, broadcast_result=False)
-    )
-    return result.value if isinstance(result, GetSecretValueResultSuccess) else None
+    """Read a secret by key, None if unset."""
+    return get_secret(secret_name, error_on_missing=False)
 
 
 def resolve_cloud_api_key() -> str:

@@ -1,13 +1,12 @@
 from typing import Any
 
 from griptape_nodes.exe_types.core_types import Parameter, ParameterMode
-from griptape_nodes.retained_mode.events.secrets_events import GetSecretValueRequest, GetSecretValueResultSuccess
-from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 from griptape_nodes.traits.options import Options
 
 from griptape_nodes_library.llm.tools import ToolType
 from griptape_nodes_library.tools.base_tool import BaseTool
 from griptape_nodes_library.utils.node_error_utils import missing_secret_error
+from griptape_nodes_library.utils.secret_utils import get_secret
 
 SEARCH_ENGINE_MAP = {
     "Exa": {
@@ -50,9 +49,7 @@ class WebSearch(BaseTool):
 
     @staticmethod
     def _has_secret(api_key: str) -> bool:
-        # A request, not GriptapeNodes.SecretsManager(), so this resolves correctly from a worker process.
-        result = GriptapeNodes.handle_request(GetSecretValueRequest(key=api_key, broadcast_result=False))
-        return isinstance(result, GetSecretValueResultSuccess) and bool(result.value)
+        return bool(get_secret(api_key))
 
     def check_api_keys(self) -> bool:
         return not self.missing_api_keys()

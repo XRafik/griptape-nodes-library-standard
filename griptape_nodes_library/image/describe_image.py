@@ -49,6 +49,11 @@ DEFAULT_MODEL = GTC_VISION_MODEL_CHOICES[0]
 LEGACY_MODEL_VALUES = cloud_legacy_values_for(GTC_VISION_MODEL_CHOICES)
 
 
+# Names the images row a value from the deprecated image parameter moved to, so a connected one
+# arriving later replaces it rather than adding a second row.
+LEGACY_IMAGE_ROW = "legacy_image_row"
+
+
 class DescribeImage(ControlNode):
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
@@ -168,6 +173,16 @@ class DescribeImage(ControlNode):
                 hide=True,
             )
         )
+        self.add_parameter(
+            Parameter(
+                name=LEGACY_IMAGE_ROW,
+                type="str",
+                default_value=None,
+                tooltip="The images row a value from the deprecated image parameter moved to.",
+                allowed_modes={ParameterMode.PROPERTY},
+                hide=True,
+            )
+        )
 
     # --- Connection / UI helpers ---
 
@@ -217,51 +232,66 @@ class DescribeImage(ControlNode):
         emit_change: bool = True,
         skip_before_value_set: bool = False,
     ) -> None:
-        # A load must not touch connections, and a saved workflow connects before it sets values,
-        # so the deprecated value waits on 'image' until a connected value arrives to migrate it.
-        if param_name == "image" and value is not None and not initial_setup:
-            logger.info(
-                f"DescribeImage '{self.name}': 'image' parameter is deprecated. Migrating value to 'images' parameter."
-            )
-            images_list = self.get_parameter_by_name("images")
-            assert isinstance(images_list, ParameterList)
-            child = images_list.add_child_parameter()
-            connections = GriptapeNodes.FlowManager().get_connections()
-            image_conn_ids = connections.incoming_index.get(self.name, {}).get("image", [])
-            if image_conn_ids:
-                conn = connections.connections[image_conn_ids[0]]
-                GriptapeNodes.handle_request(
-                    DeleteConnectionRequest(
-                        source_node_name=conn.source_node.name,
-                        source_parameter_name=conn.source_parameter.name,
-                        target_node_name=self.name,
-                        target_parameter_name="image",
-                    )
-                )
-                GriptapeNodes.handle_request(
-                    CreateConnectionRequest(
-                        source_node_name=conn.source_node.name,
-                        source_parameter_name=conn.source_parameter.name,
-                        target_node_name=self.name,
-                        target_parameter_name=child.name,
-                    )
-                )
+        if param_name != "image" or value is None:
             super().set_parameter_value(
-                child.name,
+                param_name,
                 value,
                 initial_setup=initial_setup,
                 emit_change=emit_change,
                 skip_before_value_set=skip_before_value_set,
             )
-            # A value loaded onto 'image' is superseded by the one just migrated.
-            self.parameter_values.pop("image", None)
             return
+        logger.info(
+            f"DescribeImage '{self.name}': 'image' parameter is deprecated. Migrating value to 'images' parameter."
+        )
+        row = self._legacy_image_row(initial_setup=initial_setup)
+        # A load must not touch connections. A saved workflow connects 'image' before it sets values, so a
+        # connected value is moved over when it next arrives, into the row this one went to.
+        if not initial_setup:
+            self._move_image_connection_to(row)
         super().set_parameter_value(
-            param_name,
+            row.name,
             value,
             initial_setup=initial_setup,
             emit_change=emit_change,
             skip_before_value_set=skip_before_value_set,
+        )
+        self.parameter_values.pop("image", None)
+
+    def _legacy_image_row(self, *, initial_setup: bool) -> Parameter:
+        """The images row a value from the deprecated image parameter goes to, made the first time one arrives."""
+        row_name = self.get_parameter_value(LEGACY_IMAGE_ROW)
+        if row_name:
+            existing_row = self.get_parameter_by_name(row_name)
+            if existing_row is not None:
+                return existing_row
+        images_list = self.get_parameter_by_name("images")
+        assert isinstance(images_list, ParameterList)
+        row = images_list.add_child_parameter()
+        super().set_parameter_value(LEGACY_IMAGE_ROW, row.name, initial_setup=initial_setup)
+        return row
+
+    def _move_image_connection_to(self, row: Parameter) -> None:
+        connections = GriptapeNodes.FlowManager().get_connections()
+        image_conn_ids = connections.incoming_index.get(self.name, {}).get("image", [])
+        if not image_conn_ids:
+            return
+        conn = connections.connections[image_conn_ids[0]]
+        GriptapeNodes.handle_request(
+            DeleteConnectionRequest(
+                source_node_name=conn.source_node.name,
+                source_parameter_name=conn.source_parameter.name,
+                target_node_name=self.name,
+                target_parameter_name="image",
+            )
+        )
+        GriptapeNodes.handle_request(
+            CreateConnectionRequest(
+                source_node_name=conn.source_node.name,
+                source_parameter_name=conn.source_parameter.name,
+                target_node_name=self.name,
+                target_parameter_name=row.name,
+            )
         )
 
     def validate_before_workflow_run(self) -> list[Exception] | None:
@@ -381,9 +411,6 @@ class DescribeImage(ControlNode):
                 flat_images.extend(img)
             else:
                 flat_images.append(img)
-        # A saved workflow from before 'images' existed loads its image onto 'image', where it
-        # stays until a connected value migrates it.
-        flat_images.append(self.get_parameter_value("image"))
         return [
             image_content(img)
             for img in flat_images

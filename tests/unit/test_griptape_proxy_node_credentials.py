@@ -6,8 +6,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from griptape_nodes.retained_mode.events.secrets_events import GetSecretValueRequest, GetSecretValueResultSuccess
+from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 
-import griptape_nodes_library.proxy.provider_asset_access as access_module
 import griptape_nodes_library.utils.griptape_cloud_headers as headers_module
 from griptape_nodes_library.image.google_image_generation import GoogleImageGeneration
 from griptape_nodes_library.proxy.provider_asset_access import (
@@ -52,14 +53,14 @@ def _stub_secrets(monkeypatch: pytest.MonkeyPatch, secrets: dict[str, str | None
     running against Griptape Cloud would otherwise hand these tests a real credential.
     """
 
-    real_handle_request = access_module.GriptapeNodes.handle_request
+    real_handle_request = GriptapeNodes.handle_request
 
     def _fake_handle_request(request: Any) -> Any:
-        if isinstance(request, access_module.GetSecretValueRequest):
-            return access_module.GetSecretValueResultSuccess(value=secrets.get(request.key), result_details="stub")
+        if isinstance(request, GetSecretValueRequest):
+            return GetSecretValueResultSuccess(value=secrets.get(request.key), result_details="stub")
         return real_handle_request(request)
 
-    monkeypatch.setattr(access_module.GriptapeNodes, "handle_request", _fake_handle_request)
+    monkeypatch.setattr(GriptapeNodes, "handle_request", _fake_handle_request)
 
 
 @pytest.fixture(autouse=True)

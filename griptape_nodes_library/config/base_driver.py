@@ -5,10 +5,9 @@ from typing import Any
 from griptape_nodes.exe_types.core_types import Parameter, ParameterMode
 from griptape_nodes.exe_types.node_types import DataNode
 from griptape_nodes.exe_types.param_components.model_access_component import ModelAccessComponent
-from griptape_nodes.retained_mode.events.secrets_events import GetSecretValueRequest, GetSecretValueResultSuccess
-from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 
 from griptape_nodes_library.utils.node_error_utils import missing_secret_error
+from griptape_nodes_library.utils.secret_utils import get_secret
 
 
 class BaseDriver(DataNode):
@@ -215,9 +214,7 @@ class BaseDriver(DataNode):
 
     @staticmethod
     def _get_secret(api_key_env_var: str) -> str | None:
-        # A request, not GriptapeNodes.SecretsManager(), so this resolves correctly from a worker process.
-        result = GriptapeNodes.handle_request(GetSecretValueRequest(key=api_key_env_var, broadcast_result=False))
-        return result.value if isinstance(result, GetSecretValueResultSuccess) else None
+        return get_secret(api_key_env_var)
 
     def _display_api_key_message(
         self,

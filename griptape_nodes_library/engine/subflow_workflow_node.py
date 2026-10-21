@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from griptape_nodes.exe_types.core_types import Parameter, ParameterMode, ParameterTypeBuiltin
@@ -315,7 +316,10 @@ class SubflowWorkflowNode(SuccessFailureNode):
 
     @staticmethod
     def _flow_exists(flow_name: str) -> bool:
-        result = GriptapeNodes.handle_request(GetFlowMetadataRequest(flow_name=flow_name, broadcast_result=False))
+        # A missing flow is a routine answer here, not an error to log.
+        result = GriptapeNodes.handle_request(
+            GetFlowMetadataRequest(flow_name=flow_name, broadcast_result=False, failure_log_level=logging.DEBUG)
+        )
         return isinstance(result, GetFlowMetadataResultSuccess)
 
     @staticmethod

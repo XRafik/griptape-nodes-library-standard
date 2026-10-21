@@ -21,8 +21,6 @@ from typing import TYPE_CHECKING, NamedTuple
 from urllib.parse import urljoin
 
 import httpx
-from griptape_nodes.retained_mode.events.secrets_events import GetSecretValueRequest, GetSecretValueResultSuccess
-from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 
 from griptape_nodes_library.utils.cloud_credential_utils import (
     MissingCredentialError,
@@ -30,6 +28,7 @@ from griptape_nodes_library.utils.cloud_credential_utils import (
     missing_credential_message,
 )
 from griptape_nodes_library.utils.griptape_cloud_headers import build_griptape_cloud_headers
+from griptape_nodes_library.utils.secret_utils import get_secret
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -223,15 +222,9 @@ def _read_secret(secret_name: str) -> str | None:
     Absence is routine here — an API-key user has no License and a License-only user has no API
     key — so ``should_error_on_not_found=False`` keeps an ordinary lookup out of the error log. A
     failed lookup is also treated as absence rather than propagated.
-
-    Reads through a request, not ``GriptapeNodes.SecretsManager()``, so this resolves correctly
-    from a worker process.
     """
     try:
-        result = GriptapeNodes.handle_request(
-            GetSecretValueRequest(key=secret_name, should_error_on_not_found=False, broadcast_result=False)
-        )
-        return result.value if isinstance(result, GetSecretValueResultSuccess) else None
+        return get_secret(secret_name, error_on_missing=False)
     except Exception as e:
         logger.debug("Could not read secret '%s': %s", secret_name, e)
         return None

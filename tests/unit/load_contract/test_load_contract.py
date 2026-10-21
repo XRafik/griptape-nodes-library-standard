@@ -32,7 +32,7 @@ from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 from griptape_nodes.retained_mode.variable_types import VariableScope
 
 from griptape_nodes_library.classification.row_outputs import RowOutputsMixin
-from griptape_nodes_library.image.describe_image import DescribeImage
+from griptape_nodes_library.image.describe_image import LEGACY_IMAGE_ROW, DescribeImage
 from griptape_nodes_library.lists.display_list import DisplayList
 from griptape_nodes_library.variables.create_variable import CreateVariable
 from griptape_nodes_library.variables.set_variable import SetVariable
@@ -150,7 +150,7 @@ class TestCreateVariable:
 
 
 class TestDescribeImage:
-    def test_loading_a_legacy_image_value_touches_no_connections(
+    def test_loading_a_legacy_image_value_moves_it_to_a_row_without_graph_requests(
         self, canvas: str, scratch: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         node = cast(DescribeImage, _create("DescribeImage", canvas))
@@ -162,12 +162,14 @@ class TestDescribeImage:
         assert recorder.forbidden() == []
         images = copy.get_parameter_by_name("images")
         assert isinstance(images, ParameterList)
-        assert images.get_child_parameters() == []
+        rows = images.get_child_parameters()
+        assert len(rows) == 1
+        assert copy.get_parameter_value(LEGACY_IMAGE_ROW) == rows[0].name
+        assert "image" not in copy.parameter_values
         assert len(cast(DescribeImage, copy)._collect_image_contents()) == 1
 
     def test_a_value_arriving_on_image_moves_to_images(self, canvas: str) -> None:
         node = cast(DescribeImage, _create("DescribeImage", canvas))
-        node.parameter_values["image"] = IMAGE
 
         node.set_parameter_value("image", IMAGE)
 
@@ -176,6 +178,21 @@ class TestDescribeImage:
         assert len(images.get_child_parameters()) == 1
         assert "image" not in node.parameter_values
         assert len(node._collect_image_contents()) == 1
+
+    def test_a_value_arriving_after_a_load_replaces_the_row_the_load_made(
+        self, canvas: str, scratch: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A connected legacy 'image' is loaded as a value, then its connection delivers one at run time."""
+        node = cast(DescribeImage, _create("DescribeImage", canvas))
+        node.parameter_values["image"] = IMAGE
+        copy, _ = load_copy(node.name, scratch, monkeypatch)
+
+        copy.set_parameter_value("image", IMAGE)
+
+        images = copy.get_parameter_by_name("images")
+        assert isinstance(images, ParameterList)
+        assert len(images.get_child_parameters()) == 1
+        assert len(cast(DescribeImage, copy)._collect_image_contents()) == 1
 
 
 class TestRowOutputs:

@@ -10,7 +10,6 @@ from botocore.config import Config as BotocoreConfig
 from cohere import AsyncClientV2
 from griptape_nodes.drivers.cloud_models import model_settings_for
 from griptape_nodes.retained_mode.events.agent_events import ListAgentProvidersRequest, ListAgentProvidersResultSuccess
-from griptape_nodes.retained_mode.events.secrets_events import GetSecretValueRequest, GetSecretValueResultSuccess
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 from openai import AsyncOpenAI
 from pydantic_ai.models.anthropic import AnthropicModel
@@ -36,6 +35,7 @@ from griptape_nodes_library.llm.model_config import (
 from griptape_nodes_library.utils.cloud_credential_utils import missing_credential_error, resolve_cloud_api_key
 from griptape_nodes_library.utils.griptape_cloud_headers import build_griptape_cloud_headers
 from griptape_nodes_library.utils.node_error_utils import missing_secret_error
+from griptape_nodes_library.utils.secret_utils import get_secret
 
 if TYPE_CHECKING:
     from pydantic_ai.models import Model
@@ -52,12 +52,7 @@ AWS_DEFAULT_REGION_SECRET = "AWS_DEFAULT_REGION"
 def _secret(name: str | None) -> str | None:
     if not name:
         return None
-    # A request, not GriptapeNodes.SecretsManager(), so this resolves correctly from a worker process.
-    result = GriptapeNodes.handle_request(
-        GetSecretValueRequest(key=name, should_error_on_not_found=False, broadcast_result=False)
-    )
-    value = result.value if isinstance(result, GetSecretValueResultSuccess) else None
-    return value or None
+    return get_secret(name, error_on_missing=False) or None
 
 
 def resolve_api_key(config: ModelConfig) -> str | None:

@@ -4,6 +4,8 @@ from typing import Any
 
 import httpx
 import pytest
+from griptape_nodes.retained_mode.events.secrets_events import GetSecretValueRequest, GetSecretValueResultSuccess
+from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 
 import griptape_nodes_library.proxy.provider_asset_access as access_module
 from griptape_nodes_library.proxy.provider_asset_access import (
@@ -151,14 +153,14 @@ def _stub_secrets(monkeypatch: pytest.MonkeyPatch, secrets: dict[str, str | None
     that blank string.
     """
 
-    real_handle_request = access_module.GriptapeNodes.handle_request
+    real_handle_request = GriptapeNodes.handle_request
 
     def _fake_handle_request(request: Any) -> Any:
-        if isinstance(request, access_module.GetSecretValueRequest):
-            return access_module.GetSecretValueResultSuccess(value=secrets.get(request.key), result_details="stub")
+        if isinstance(request, GetSecretValueRequest):
+            return GetSecretValueResultSuccess(value=secrets.get(request.key), result_details="stub")
         return real_handle_request(request)
 
-    monkeypatch.setattr(access_module.GriptapeNodes, "handle_request", _fake_handle_request)
+    monkeypatch.setattr(GriptapeNodes, "handle_request", _fake_handle_request)
 
 
 def test_resolve_prefers_proxy_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -275,7 +277,7 @@ def test_resolve_survives_unavailable_secrets_manager(monkeypatch: pytest.Monkey
     def _raise(*_args: object, **_kwargs: object) -> None:
         raise RuntimeError("no engine here")
 
-    monkeypatch.setattr(access_module.GriptapeNodes, "handle_request", _raise)
+    monkeypatch.setattr(GriptapeNodes, "handle_request", _raise)
     credential = resolve_proxy_credential()
     assert credential.value is None
     assert credential.blank_sources == ()

@@ -4,12 +4,12 @@ from typing import Any
 
 from griptape_nodes.exe_types.core_types import Parameter, ParameterMessage
 from griptape_nodes.exe_types.param_types.parameter_bool import ParameterBool
-from griptape_nodes.retained_mode.events.secrets_events import GetSecretValueRequest, GetSecretValueResultSuccess
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 from griptape_nodes.traits.button import Button
 
 from griptape_nodes_library.proxy.proxy_api_key_providers import ProxyApiKeyProviderConfig
 from griptape_nodes_library.utils.node_error_utils import missing_secret_error, missing_secret_message
+from griptape_nodes_library.utils.secret_utils import get_secret
 
 __all__ = ["ProxyAuthProviderParameter"]
 
@@ -109,9 +109,7 @@ class ProxyAuthProviderParameter:
         return bool(secret_value)
 
     def _get_secret(self, secret_name: str) -> str:
-        # A request, not GriptapeNodes.SecretsManager(), so this resolves correctly from a worker process.
-        result = GriptapeNodes.handle_request(GetSecretValueRequest(key=secret_name, broadcast_result=False))
-        secret_value = result.value if isinstance(result, GetSecretValueResultSuccess) else None
+        secret_value = get_secret(secret_name)
         if not secret_value:
             config = self._provider_config
             msg = (
