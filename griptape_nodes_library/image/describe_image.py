@@ -217,7 +217,9 @@ class DescribeImage(ControlNode):
         emit_change: bool = True,
         skip_before_value_set: bool = False,
     ) -> None:
-        if param_name == "image" and value is not None:
+        # A load must not touch connections, and a saved workflow connects before it sets values,
+        # so the deprecated value waits on 'image' until a connected value arrives to migrate it.
+        if param_name == "image" and value is not None and not initial_setup:
             logger.info(
                 f"DescribeImage '{self.name}': 'image' parameter is deprecated. Migrating value to 'images' parameter."
             )
@@ -251,6 +253,8 @@ class DescribeImage(ControlNode):
                 emit_change=emit_change,
                 skip_before_value_set=skip_before_value_set,
             )
+            # A value loaded onto 'image' is superseded by the one just migrated.
+            self.parameter_values.pop("image", None)
             return
         super().set_parameter_value(
             param_name,
@@ -377,6 +381,9 @@ class DescribeImage(ControlNode):
                 flat_images.extend(img)
             else:
                 flat_images.append(img)
+        # A saved workflow from before 'images' existed loads its image onto 'image', where it
+        # stays until a connected value migrates it.
+        flat_images.append(self.get_parameter_value("image"))
         return [
             image_content(img)
             for img in flat_images

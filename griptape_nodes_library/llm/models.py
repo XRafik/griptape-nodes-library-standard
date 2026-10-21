@@ -10,6 +10,7 @@ from botocore.config import Config as BotocoreConfig
 from cohere import AsyncClientV2
 from griptape_nodes.drivers.cloud_models import model_settings_for
 from griptape_nodes.retained_mode.events.agent_events import ListAgentProvidersRequest, ListAgentProvidersResultSuccess
+from griptape_nodes.retained_mode.events.secrets_events import GetSecretValueRequest, GetSecretValueResultSuccess
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 from openai import AsyncOpenAI
 from pydantic_ai.models.anthropic import AnthropicModel
@@ -51,7 +52,12 @@ AWS_DEFAULT_REGION_SECRET = "AWS_DEFAULT_REGION"
 def _secret(name: str | None) -> str | None:
     if not name:
         return None
-    return GriptapeNodes.SecretsManager().get_secret(name, should_error_on_not_found=False) or None
+    # A request, not GriptapeNodes.SecretsManager(), so this resolves correctly from a worker process.
+    result = GriptapeNodes.handle_request(
+        GetSecretValueRequest(key=name, should_error_on_not_found=False, broadcast_result=False)
+    )
+    value = result.value if isinstance(result, GetSecretValueResultSuccess) else None
+    return value or None
 
 
 def resolve_api_key(config: ModelConfig) -> str | None:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 import httpx
 import pytest
 
@@ -142,16 +144,21 @@ def test_missing_api_key_is_indeterminate(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 def _stub_secrets(monkeypatch: pytest.MonkeyPatch, secrets: dict[str, str | None]) -> None:
-    """Make GriptapeNodes.SecretsManager().get_secret() read from an in-memory dict.
+    """Make the GetSecretValueRequest lookup read from an in-memory dict.
 
-    Mirrors the real manager's contract: an absent secret is None, a secret registered with a
-    blank value is that blank string.
+    Mirrors the real handler's contract for `should_error_on_not_found=False`: an absent secret
+    answers Success with value=None, a secret registered with a blank value answers Success with
+    that blank string.
     """
-    monkeypatch.setattr(
-        access_module.GriptapeNodes,
-        "SecretsManager",
-        lambda: type("S", (), {"get_secret": lambda self, name, **_kwargs: secrets.get(name)})(),
-    )
+
+    real_handle_request = access_module.GriptapeNodes.handle_request
+
+    def _fake_handle_request(request: Any) -> Any:
+        if isinstance(request, access_module.GetSecretValueRequest):
+            return access_module.GetSecretValueResultSuccess(value=secrets.get(request.key), result_details="stub")
+        return real_handle_request(request)
+
+    monkeypatch.setattr(access_module.GriptapeNodes, "handle_request", _fake_handle_request)
 
 
 def test_resolve_prefers_proxy_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -261,14 +268,14 @@ def test_resolve_strips_surrounding_whitespace(monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_resolve_survives_unavailable_secrets_manager(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Resolution runs in contexts where the SecretsManager may not be reachable; the caller needs
+    # Resolution runs in contexts where the secret lookup may not be reachable; the caller needs
     # a credential message, not an unrelated exception.
     monkeypatch.delenv(PROXY_API_KEY_ENV_VAR, raising=False)
 
-    def _raise() -> None:
+    def _raise(*_args: object, **_kwargs: object) -> None:
         raise RuntimeError("no engine here")
 
-    monkeypatch.setattr(access_module.GriptapeNodes, "SecretsManager", _raise)
+    monkeypatch.setattr(access_module.GriptapeNodes, "handle_request", _raise)
     credential = resolve_proxy_credential()
     assert credential.value is None
     assert credential.blank_sources == ()

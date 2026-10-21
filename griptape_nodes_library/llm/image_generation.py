@@ -12,6 +12,7 @@ from enum import StrEnum
 from typing import Any
 
 import httpx
+from griptape_nodes.retained_mode.events.secrets_events import GetSecretValueRequest, GetSecretValueResultSuccess
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 from openai import APIStatusError, OpenAI
 from pydantic import BaseModel
@@ -124,7 +125,11 @@ def _generate_griptape_cloud(config: ImageGenerationConfig, prompt: str) -> byte
 
 def _generate_openai_compatible(config: ImageGenerationConfig, prompt: str) -> bytes:
     secret = config.api_key_secret or DEFAULT_API_KEY_SECRETS[config.provider]
-    api_key = GriptapeNodes.SecretsManager().get_secret(secret, should_error_on_not_found=False)
+    # A request, not GriptapeNodes.SecretsManager(), so this resolves correctly from a worker process.
+    result = GriptapeNodes.handle_request(
+        GetSecretValueRequest(key=secret, should_error_on_not_found=False, broadcast_result=False)
+    )
+    api_key = result.value if isinstance(result, GetSecretValueResultSuccess) else None
     if not api_key:
         msg = (
             f"{secret} is not set. Image model '{config.model}' needs it. "

@@ -2,6 +2,7 @@ from typing import Any
 
 from griptape_nodes.exe_types.core_types import Parameter, ParameterMessage
 from griptape_nodes.exe_types.node_types import BaseNode
+from griptape_nodes.retained_mode.events.secrets_events import GetSecretValueRequest, GetSecretValueResultSuccess
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes, logger
 
 
@@ -66,7 +67,9 @@ class ApiCheck(BaseNode):
     def clear_api_key_check(self) -> bool:
         # Check to see if the API key is set, if not we'll show the message
         message_name = "api_key_message"
-        api_key = GriptapeNodes.SecretsManager().get_secret("EXA_API_KEY")
+        # A request, not GriptapeNodes.SecretsManager(), so this resolves correctly from a worker process.
+        result = GriptapeNodes.handle_request(GetSecretValueRequest(key="EXA_API_KEY", broadcast_result=False))
+        api_key = result.value if isinstance(result, GetSecretValueResultSuccess) else None
         if api_key:
             self.hide_message_by_name(message_name)
             logger.info("Found it")

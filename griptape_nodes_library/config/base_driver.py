@@ -5,6 +5,7 @@ from typing import Any
 from griptape_nodes.exe_types.core_types import Parameter, ParameterMode
 from griptape_nodes.exe_types.node_types import DataNode
 from griptape_nodes.exe_types.param_components.model_access_component import ModelAccessComponent
+from griptape_nodes.retained_mode.events.secrets_events import GetSecretValueRequest, GetSecretValueResultSuccess
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 
 from griptape_nodes_library.utils.node_error_utils import missing_secret_error
@@ -212,6 +213,12 @@ class BaseDriver(DataNode):
             self._model_access.on_value_set(parameter, value)
         return super().after_value_set(parameter, value)
 
+    @staticmethod
+    def _get_secret(api_key_env_var: str) -> str | None:
+        # A request, not GriptapeNodes.SecretsManager(), so this resolves correctly from a worker process.
+        result = GriptapeNodes.handle_request(GetSecretValueRequest(key=api_key_env_var, broadcast_result=False))
+        return result.value if isinstance(result, GetSecretValueResultSuccess) else None
+
     def _display_api_key_message(
         self,
         service_name: str,
@@ -242,7 +249,7 @@ class BaseDriver(DataNode):
         message_param = self.get_parameter_by_name("message")
         if message_param is not None:
             if credential_present is None:
-                api_key = GriptapeNodes.SecretsManager().get_secret(api_key_env_var)
+                api_key = self._get_secret(api_key_env_var)
             else:
                 api_key = credential_present
             msg = f"⚠️ This node requires an API key from {service_name}\nPlease visit {api_key_url} to obtain a valid key and update your settings."
@@ -298,7 +305,7 @@ class BaseDriver(DataNode):
         exceptions = []
 
         if resolved_credential is None:
-            api_key = GriptapeNodes.SecretsManager().get_secret(api_key_env_var)
+            api_key = self._get_secret(api_key_env_var)
         else:
             api_key = resolved_credential
         if not api_key:

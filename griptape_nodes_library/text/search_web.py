@@ -2,6 +2,7 @@ from typing import Any
 
 from griptape_nodes.exe_types.core_types import Parameter, ParameterMessage, ParameterMode
 from griptape_nodes.exe_types.node_types import AsyncResult
+from griptape_nodes.retained_mode.events.secrets_events import GetSecretValueRequest, GetSecretValueResultSuccess
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 from griptape_nodes.traits.options import Options
 
@@ -81,7 +82,13 @@ class SearchWeb(BaseTask):
     def missing_api_keys(self) -> list[str]:
         search_engine = self.get_parameter_value("search_engine")
         api_keys = SEARCH_ENGINE_MAP[search_engine]["api_keys"] or []
-        return [api_key for api_key in api_keys if not GriptapeNodes.SecretsManager().get_secret(api_key)]
+        return [api_key for api_key in api_keys if not self._has_secret(api_key)]
+
+    @staticmethod
+    def _has_secret(api_key: str) -> bool:
+        # A request, not GriptapeNodes.SecretsManager(), so this resolves correctly from a worker process.
+        result = GriptapeNodes.handle_request(GetSecretValueRequest(key=api_key, broadcast_result=False))
+        return isinstance(result, GetSecretValueResultSuccess) and bool(result.value)
 
     def check_api_keys(self) -> bool:
         return not self.missing_api_keys()

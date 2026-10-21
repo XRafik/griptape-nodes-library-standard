@@ -9,6 +9,7 @@ import httpx
 import trafilatura
 from ddgs import DDGS
 from exa_py import Exa
+from griptape_nodes.retained_mode.events.secrets_events import GetSecretValueRequest, GetSecretValueResultSuccess
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 from trafilatura.settings import use_config
 
@@ -27,7 +28,11 @@ class SearchEngine(StrEnum):
 
 
 def _secret(name: str) -> str:
-    value = GriptapeNodes.SecretsManager().get_secret(name, should_error_on_not_found=False)
+    # A request, not GriptapeNodes.SecretsManager(), so this resolves correctly from a worker process.
+    result = GriptapeNodes.handle_request(
+        GetSecretValueRequest(key=name, should_error_on_not_found=False, broadcast_result=False)
+    )
+    value = result.value if isinstance(result, GetSecretValueResultSuccess) else None
     if not value:
         raise missing_secret_error(name)
     return value
