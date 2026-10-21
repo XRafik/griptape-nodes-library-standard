@@ -21,7 +21,12 @@ from griptape_nodes.retained_mode.events.flow_events import (
     CreateFlowRequest,
     CreateFlowResultSuccess,
 )
-from griptape_nodes.retained_mode.events.node_events import CreateNodeRequest, CreateNodeResultSuccess
+from griptape_nodes.retained_mode.events.node_events import (
+    AddNodesToNodeGroupRequest,
+    AddNodesToNodeGroupResultSuccess,
+    CreateNodeRequest,
+    CreateNodeResultSuccess,
+)
 from griptape_nodes.retained_mode.events.variable_events import (
     CreateVariableRequest,
     CreateVariableResultSuccess,
@@ -71,13 +76,16 @@ def _create(node_type: str, flow: str) -> Any:
     return GriptapeNodes.NodeManager().get_node_by_name(result.node_name)
 
 
-def _connect(source: BaseNode, source_param: str, target: BaseNode, target_param: str) -> None:
+def _connect(
+    source: BaseNode, source_param: str, target: BaseNode, target_param: str, *, initial_setup: bool = False
+) -> None:
     result = GriptapeNodes.handle_request(
         CreateConnectionRequest(
             source_node_name=source.name,
             source_parameter_name=source_param,
             target_node_name=target.name,
             target_parameter_name=target_param,
+            initial_setup=initial_setup,
         )
     )
     assert isinstance(result, CreateConnectionResultSuccess), result.result_details
@@ -87,6 +95,12 @@ def _outgoing_targets(node: BaseNode) -> list[tuple[str, str]]:
     result = GriptapeNodes.handle_request(ListConnectionsForNodeRequest(node_name=node.name))
     assert isinstance(result, ListConnectionsForNodeResultSuccess)
     return [(c.target_node_name, c.target_parameter_name) for c in result.outgoing_connections]
+
+
+def _incoming_targets(node: BaseNode) -> list[str]:
+    result = GriptapeNodes.handle_request(ListConnectionsForNodeRequest(node_name=node.name))
+    assert isinstance(result, ListConnectionsForNodeResultSuccess)
+    return [c.target_parameter_name for c in result.incoming_connections]
 
 
 def _has_variable(name: str, flow: str) -> bool:
@@ -182,7 +196,6 @@ class TestDescribeImage:
     def test_a_value_arriving_after_a_load_replaces_the_row_the_load_made(
         self, canvas: str, scratch: str, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A connected legacy 'image' is loaded as a value, then its connection delivers one at run time."""
         node = cast(DescribeImage, _create("DescribeImage", canvas))
         node.parameter_values["image"] = IMAGE
         copy, _ = load_copy(node.name, scratch, monkeypatch)
@@ -193,6 +206,42 @@ class TestDescribeImage:
         assert isinstance(images, ParameterList)
         assert len(images.get_child_parameters()) == 1
         assert len(cast(DescribeImage, copy)._collect_image_contents()) == 1
+
+    @pytest.mark.parametrize("connect_first", [True, False], ids=["connect_then_set", "set_then_connect"])
+    def test_a_connection_and_value_on_image_share_one_row(self, canvas: str, *, connect_first: bool) -> None:
+        """A saved workflow connects before it sets values; a paste sets values before it connects."""
+        source = _create("LoadImage", canvas)
+        node = cast(DescribeImage, _create("DescribeImage", canvas))
+
+        if connect_first:
+            _connect(source, "image", node, "image", initial_setup=True)
+            node.set_parameter_value("image", IMAGE, initial_setup=True)
+        else:
+            node.set_parameter_value("image", IMAGE, initial_setup=True)
+            _connect(source, "image", node, "image", initial_setup=True)
+
+        images = node.get_parameter_by_name("images")
+        assert isinstance(images, ParameterList)
+        rows = images.get_child_parameters()
+        assert len(rows) == 1
+        assert node.get_parameter_value(LEGACY_IMAGE_ROW) == rows[0].name
+        assert _incoming_targets(node) == [rows[0].name]
+        assert "image" not in node.parameter_values
+        assert len(node._collect_image_contents()) == 1
+
+    def test_a_connection_from_outside_its_group_moves_to_a_row_through_the_proxy(self, canvas: str) -> None:
+        source = _create("LoadImage", canvas)
+        node = cast(DescribeImage, _create("DescribeImage", canvas))
+        group = _create("StandardSubflowNodeGroup", canvas)
+        added = GriptapeNodes.handle_request(
+            AddNodesToNodeGroupRequest(node_names=[node.name], node_group_name=group.name)
+        )
+        assert isinstance(added, AddNodesToNodeGroupResultSuccess), added.result_details
+
+        _connect(source, "image", node, "image", initial_setup=True)
+
+        assert _incoming_targets(node) == [node.get_parameter_value(LEGACY_IMAGE_ROW)]
+        assert [target for _, target in _outgoing_targets(source)] == _incoming_targets(group)
 
 
 class TestRowOutputs:

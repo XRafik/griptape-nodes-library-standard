@@ -50,7 +50,7 @@ def generate_filename(
     """
     # Get workflow name from context if not provided
     if workflow_name is None:
-        result = GriptapeNodes.handle_request(GetWorkflowContextRequest())
+        result = GriptapeNodes.handle_request(GetWorkflowContextRequest(broadcast_result=False))
         if isinstance(result, GetWorkflowContextSuccess) and result.workflow_name is not None:
             workflow_name = result.workflow_name
         else:

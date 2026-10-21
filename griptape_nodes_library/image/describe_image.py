@@ -9,6 +9,7 @@ from griptape_nodes.exe_types.core_types import (
     ParameterMode,
     ParameterType,
 )
+from griptape_nodes.exe_types.node_groups import SubflowNodeGroup
 from griptape_nodes.exe_types.node_types import AsyncResult, BaseNode, ControlNode
 from griptape_nodes.exe_types.param_components.model_access_component import ModelAccessComponent
 from griptape_nodes.exe_types.param_types.parameter_bool import ParameterBool
@@ -49,8 +50,8 @@ DEFAULT_MODEL = GTC_VISION_MODEL_CHOICES[0]
 LEGACY_MODEL_VALUES = cloud_legacy_values_for(GTC_VISION_MODEL_CHOICES)
 
 
-# Names the images row a value from the deprecated image parameter moved to, so a connected one
-# arriving later replaces it rather than adding a second row.
+# Names the images row the deprecated image parameter's value and connection move to, so both land in
+# one row whichever arrives first.
 LEGACY_IMAGE_ROW = "legacy_image_row"
 
 
@@ -245,10 +246,6 @@ class DescribeImage(ControlNode):
             f"DescribeImage '{self.name}': 'image' parameter is deprecated. Migrating value to 'images' parameter."
         )
         row = self._legacy_image_row(initial_setup=initial_setup)
-        # A load must not touch connections. A saved workflow connects 'image' before it sets values, so a
-        # connected value is moved over when it next arrives, into the row this one went to.
-        if not initial_setup:
-            self._move_image_connection_to(row)
         super().set_parameter_value(
             row.name,
             value,
@@ -271,28 +268,37 @@ class DescribeImage(ControlNode):
         super().set_parameter_value(LEGACY_IMAGE_ROW, row.name, initial_setup=initial_setup)
         return row
 
-    def _move_image_connection_to(self, row: Parameter) -> None:
-        connections = GriptapeNodes.FlowManager().get_connections()
-        image_conn_ids = connections.incoming_index.get(self.name, {}).get("image", [])
-        if not image_conn_ids:
-            return
-        conn = connections.connections[image_conn_ids[0]]
+    def _move_image_connection(self, source_node: BaseNode, source_parameter: Parameter) -> None:
+        """Move a connection made to the deprecated image parameter onto the images row its value goes to."""
+        row = self._legacy_image_row(initial_setup=False)
         GriptapeNodes.handle_request(
             DeleteConnectionRequest(
-                source_node_name=conn.source_node.name,
-                source_parameter_name=conn.source_parameter.name,
+                source_node_name=source_node.name,
+                source_parameter_name=source_parameter.name,
                 target_node_name=self.name,
                 target_parameter_name="image",
             )
         )
+        # initial_setup keeps this from pushing the source's value into the row: the connection being
+        # moved already delivers it, to 'image', and set_parameter_value sends that to the row.
         GriptapeNodes.handle_request(
             CreateConnectionRequest(
-                source_node_name=conn.source_node.name,
-                source_parameter_name=conn.source_parameter.name,
+                source_node_name=source_node.name,
+                source_parameter_name=source_parameter.name,
                 target_node_name=self.name,
                 target_parameter_name=row.name,
+                initial_setup=True,
             )
         )
+
+    def _is_connection_from_outside_group(self, source_node: BaseNode) -> bool:
+        """Whether the engine will reroute this connection through a proxy on the group, after the hook.
+
+        The reroute deletes the connection and connects 'image' again from the group, so the move waits for
+        that second connection.
+        """
+        group = self.parent_group
+        return isinstance(group, SubflowNodeGroup) and source_node is not group and not group.contains_node(source_node)
 
     def validate_before_workflow_run(self) -> list[Exception] | None:
         exceptions = []
@@ -312,6 +318,11 @@ class DescribeImage(ControlNode):
     ) -> None:
         if target_parameter.name == "agent":
             self._provider.hide()
+
+        # A saved workflow connects before it sets values and a paste sets values before it connects, so
+        # the connection moves here, where both orders reach it.
+        if target_parameter.name == "image" and not self._is_connection_from_outside_group(source_node):
+            self._move_image_connection(source_node, source_parameter)
 
         if target_parameter.name == "output_schema":
             self._update_output_type_and_validate_connections("json")

@@ -269,20 +269,6 @@ def test_resolve_strips_surrounding_whitespace(monkeypatch: pytest.MonkeyPatch) 
     assert resolve_proxy_credential().value == "the-api-key"
 
 
-def test_resolve_survives_unavailable_secrets_manager(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Resolution runs in contexts where the secret lookup may not be reachable; the caller needs
-    # a credential message, not an unrelated exception.
-    monkeypatch.delenv(PROXY_API_KEY_ENV_VAR, raising=False)
-
-    def _raise(*_args: object, **_kwargs: object) -> None:
-        raise RuntimeError("no engine here")
-
-    monkeypatch.setattr(GriptapeNodes, "handle_request", _raise)
-    credential = resolve_proxy_credential()
-    assert credential.value is None
-    assert credential.blank_sources == ()
-
-
 def test_missing_message_names_both_credentials() -> None:
     message = missing_proxy_credential_message(ProxyCredential(value=None), attempted="run My Node")
     assert "Attempted to run My Node." in message

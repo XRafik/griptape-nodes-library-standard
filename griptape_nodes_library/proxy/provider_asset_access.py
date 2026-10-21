@@ -220,14 +220,9 @@ def _read_secret(secret_name: str) -> str | None:
     """Return a secret's raw value, None when it is absent or cannot be read.
 
     Absence is routine here — an API-key user has no License and a License-only user has no API
-    key — so ``should_error_on_not_found=False`` keeps an ordinary lookup out of the error log. A
-    failed lookup is also treated as absence rather than propagated.
+    key — so ``error_on_missing=False`` keeps an ordinary lookup out of the error log.
     """
-    try:
-        return get_secret(secret_name, error_on_missing=False)
-    except Exception as e:
-        logger.debug("Could not read secret '%s': %s", secret_name, e)
-        return None
+    return get_secret(secret_name, error_on_missing=False)
 
 
 @dataclass
