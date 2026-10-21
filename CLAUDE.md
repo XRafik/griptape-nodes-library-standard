@@ -1,5 +1,13 @@
 # Griptape Nodes Library — Standard
 
+## Validate inputs before the run
+
+When you add or edit a node that sends an image, video or audio input to a provider, check the provider's documented limits in `validate_before_node_run`, so a bad input fails before anything is uploaded and the error says which limit it broke.
+
+- **Use the engine's checks.** `griptape_nodes.exe_types.input_checks` has `image_errors`, `video_errors`, `audio_errors`, `check_count` and the single checks they're built from. They read the format, size, pixel size, codec, duration, frame rate and frame count from the file, and skip anything they can't read locally. Don't write your own readers or limit checks in the library. See [Checking inputs before a run](https://docs.griptapenodes.com/en/stable/development/custom_nodes/error_handling/#checking-inputs-before-a-run).
+- **Keep only the provider's specifics in the node:** the limits, each with a comment quoting the provider's docs and its URL, and the docs URL the error links to (the selected model's page, where the provider has one).
+- **Move a check into the engine only when two or more nodes need it now.** If a check isn't in the engine yet and two or more nodes from different providers need it, add it to the engine, not to a library module. Nodes from one provider that already share a module (such as `seedance_common.py`) don't count, and neither does a node that might need it later: keep that logic in the library until a second real user exists.
+
 ## Python conventions
 
 ### Hoist imports to the top level unless they cause circular imports

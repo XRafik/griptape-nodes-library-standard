@@ -424,25 +424,43 @@ BaseProxyNode automatically adds the model field to the request.
 
 ### Validation Patterns
 
-Use `validate_before_node_run()` for pre-execution validation:
+Use `validate_before_node_run()` for pre-execution validation. Return one exception per problem, each naming the parameter as the UI shows it and saying how to fix it, with no node name (the editor shows which node failed). Check media inputs against the provider's documented limits with the engine's `griptape_nodes.exe_types.input_checks`:
 
 ```python
+from griptape_nodes.exe_types.input_checks import check_count, image_errors, input_subject
+
+# "Up to 10 images, JPEG or PNG, each up to 10 MB" - https://example.com/limits
+LIMITS_URL = "https://example.com/limits"
+MAX_IMAGES = 10
+SUPPORTED_IMAGE_MIME_TYPES = ("image/jpeg", "image/png")
+MAX_IMAGE_BYTES = 10 * 1024 * 1024
+
+
 def validate_before_node_run(self) -> list[Exception] | None:
     exceptions = super().validate_before_node_run() or []
 
-    # Validate required parameters
     if not self.get_parameter_value("prompt"):
-        exceptions.append(ValueError(f"{self.name} requires a prompt"))
+        exceptions.append(ValueError("A prompt is required. Enter one in 'prompt'."))
 
-    # Validate parameter constraints
-    images = self.get_parameter_value("images") or []
-    if len(images) > 10:
-        exceptions.append(ValueError(f"{self.name} allows max 10 images, got {len(images)}"))
+    images = self.get_parameter_list_value("images") or []
+    too_many = check_count(len(images), maximum=MAX_IMAGES, parameter="images", noun="images", docs_url=LIMITS_URL)
+    if too_many:
+        exceptions.append(too_many)
+    for position, image in enumerate(images, start=1):
+        exceptions.extend(
+            image_errors(
+                image,
+                subject=input_subject("images", noun="image", position=position),
+                allowed_mime_types=SUPPORTED_IMAGE_MIME_TYPES,
+                maximum_bytes=MAX_IMAGE_BYTES,
+                docs_url=LIMITS_URL,
+            )
+        )
 
-    return exceptions if exceptions else None
+    return exceptions or None
 ```
 
-This prevents execution if validation fails, saving API calls.
+This fails the node before anything is uploaded or sent, so a bad input costs no API call. See CLAUDE.md, "Validate inputs before the run", and the `node-errors` skill for message wording.
 
 ## Real Error Response Examples
 

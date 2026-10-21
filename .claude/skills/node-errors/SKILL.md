@@ -123,6 +123,30 @@ return
 - **Exception: Math Expression** returns 0.0 for an expression it can't evaluate, so a typo doesn't
   stop the run.
 
+## Media inputs
+
+Check an image, video or audio input against the provider's documented limits in
+`validate_before_node_run`, with the engine's `griptape_nodes.exe_types.input_checks`. Its errors
+already follow this skill: they name the input, the value and the limit, say how to fix it, and
+link the docs URL you pass.
+
+```python
+exceptions.extend(
+    image_errors(
+        image,
+        subject=input_subject("Start Frame", noun="image"),
+        allowed_mime_types=("image/jpeg", "image/png"),
+        maximum_bytes=10 * 1024 * 1024,  # "Up to 10 MB" - https://example.com/limits
+        min_side=300,
+        docs_url=LIMITS_URL,
+    )
+)
+```
+
+Don't write your own media readers or limit checks. If two or more nodes from different providers
+need a check the engine doesn't have, add it to the engine. See CLAUDE.md, "Validate inputs before
+the run", and the engine's [Checking inputs before a run](https://docs.griptapenodes.com/en/stable/development/custom_nodes/error_handling/#checking-inputs-before-a-run).
+
 ## Proxy nodes
 
 The base class `GriptapeProxyNode` attaches the response, IDs, and status for you.
