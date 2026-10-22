@@ -4,8 +4,8 @@ import logging
 from contextlib import suppress
 from typing import Any, ClassVar
 
-from griptape.artifacts import ImageUrlArtifact
-from griptape_nodes.exe_types.core_types import ParameterGroup, ParameterMode
+from griptape.artifacts import ImageArtifact, ImageUrlArtifact
+from griptape_nodes.exe_types.core_types import Parameter, ParameterGroup, ParameterList, ParameterMode
 from griptape_nodes.exe_types.param_components.model_access_component import ModelAccessComponent
 from griptape_nodes.exe_types.param_components.project_file_parameter import ProjectFileParameter
 from griptape_nodes.exe_types.param_types.parameter_dict import ParameterDict
@@ -14,6 +14,7 @@ from griptape_nodes.exe_types.param_types.parameter_int import ParameterInt
 from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
 from griptape_nodes.files.file import File, FileLoadError
 from griptape_nodes.traits.options import Options
+from griptape_nodes.utils.artifact_normalization import normalize_artifact_list
 
 from griptape_nodes_library.proxy import ArtifactKind, GriptapeProxyNode
 
@@ -28,6 +29,7 @@ class GrokImageEdit(GriptapeProxyNode):
     Inputs:
         - model (str): Grok image model to use
         - image (ImageUrlArtifact): Input image to edit (required)
+        - additional_images (list): Up to 4 more source images sent alongside 'image'
         - prompt (str): Editing prompt
         - n (int): Number of images to generate (1-10)
         - quality (str): Output quality (low, medium, high)
@@ -44,6 +46,8 @@ class GrokImageEdit(GriptapeProxyNode):
 
     MIN_IMAGES: ClassVar[int] = 1
     MAX_IMAGES: ClassVar[int] = 10
+    # xAI accepts up to 5 source images per edit: 'image' plus up to 4 additional ones.
+    MAX_SOURCE_IMAGES: ClassVar[int] = 5
     QUALITY_OPTIONS: ClassVar[list[str]] = ["low", "medium", "high"]
 
     RESOLUTION_OPTIONS: ClassVar[list[str]] = ["1k", "2k"]
@@ -99,6 +103,18 @@ class GrokImageEdit(GriptapeProxyNode):
                 allowed_modes={ParameterMode.INPUT},
                 hide_property=True,
                 ui_options={"display_name": "Image"},
+            )
+        )
+
+        self.add_parameter(
+            ParameterList(
+                name="additional_images",
+                input_types=["ImageArtifact", "ImageUrlArtifact", "str"],
+                default_value=[],
+                tooltip=f"Optional extra source images sent with 'Image' (up to {self.MAX_SOURCE_IMAGES - 1})",
+                allowed_modes={ParameterMode.INPUT},
+                max_items=self.MAX_SOURCE_IMAGES - 1,
+                ui_options={"display_name": "Additional Images", "expander": True, "hide_property": True},
             )
         )
 
@@ -198,6 +214,9 @@ class GrokImageEdit(GriptapeProxyNode):
         if not image_input:
             return None
 
+        if isinstance(image_input, ImageArtifact):
+            return f"data:{image_input.mime_type};base64,{image_input.base64}"
+
         image_value = self._extract_image_value(image_input)
         if not image_value:
             return None
@@ -207,6 +226,19 @@ class GrokImageEdit(GriptapeProxyNode):
         except FileLoadError:
             logger.debug("%s failed to load image value: %s", self.name, image_value)
             return None
+
+    def _get_additional_images(self) -> list[Any]:
+        # Connected values bypass after_value_set, so normalize on read as well.
+        images = self.get_parameter_list_value("additional_images")
+        normalized = normalize_artifact_list(images, ImageUrlArtifact, accepted_types=(ImageArtifact,))
+        return [item for item in normalized if self._has_media_value(item)]
+
+    def after_value_set(self, parameter: Parameter, value: Any) -> None:
+        if parameter.name == "additional_images" and isinstance(value, list):
+            updated_list = normalize_artifact_list(value, ImageUrlArtifact, accepted_types=(ImageArtifact,))
+            if updated_list != value:
+                self.set_parameter_value("additional_images", updated_list)
+        return super().after_value_set(parameter, value)
 
     def _show_image_output_parameters(self, count: int) -> None:
         for i in range(1, 11):
@@ -232,6 +264,15 @@ class GrokImageEdit(GriptapeProxyNode):
         if not self._has_media_value(image_value):
             exceptions.append(ValueError("Connect an image to 'Image'."))
 
+        additional_count = len(self._get_additional_images())
+        if additional_count > self.MAX_SOURCE_IMAGES - 1:
+            exceptions.append(
+                ValueError(
+                    f"'Additional Images' holds {additional_count} images; "
+                    f"at most {self.MAX_SOURCE_IMAGES - 1} can be sent with 'Image'."
+                )
+            )
+
         n_value = self.get_parameter_value("n")
         if n_value is None or not self.MIN_IMAGES <= int(n_value) <= self.MAX_IMAGES:
             exceptions.append(ValueError(f"'n' must be between {self.MIN_IMAGES} and {self.MAX_IMAGES}."))
@@ -243,7 +284,12 @@ class GrokImageEdit(GriptapeProxyNode):
         n_value = int(self.get_parameter_value("n") or 1)
         resolution = self.get_parameter_value("resolution") or "1k"
         api_model_id = self._get_selected_model_id()
-        image_data_uri = await self._prepare_image_data_uri(self.get_parameter_value("image"))
+        source_images = [self.get_parameter_value("image"), *self._get_additional_images()]
+        image_data_uris = [await self._prepare_image_data_uri(image) for image in source_images]
+        unreadable = [str(idx) for idx, uri in enumerate(image_data_uris, start=1) if not uri]
+        if unreadable:
+            msg = f"Source image(s) {', '.join(unreadable)} could not be read."
+            raise ValueError(msg)
 
         payload: dict[str, Any] = {
             "model": api_model_id,
@@ -254,8 +300,10 @@ class GrokImageEdit(GriptapeProxyNode):
             "response_format": "url",
         }
 
-        if image_data_uri:
-            payload["image"] = {"url": image_data_uri}
+        if len(image_data_uris) == 1:
+            payload["image"] = {"url": image_data_uris[0]}
+        else:
+            payload["images"] = [{"url": uri} for uri in image_data_uris]
 
         return payload
 
