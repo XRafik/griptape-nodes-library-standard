@@ -13,6 +13,8 @@ from griptape_nodes_library.proxy.griptape_proxy_node import (
     STATUS_FAILED,
     STATUS_RUNNING,
     STATUS_TIMED_OUT,
+    GenerationFailedError,
+    GenerationIncompleteError,
 )
 
 
@@ -73,9 +75,9 @@ async def test_polling_timeout_preserves_generation_id_and_sets_timed_out_status
     node.parameter_output_values["generation_id"] = "gen-preserved"
     node._set_safe_defaults = lambda: None  # type: ignore[method-assign]
 
-    result = await node._poll_generation_status("gen-preserved", {"Authorization": "Bearer key"})
+    with pytest.raises(GenerationIncompleteError):
+        await node._poll_generation_status("gen-preserved", {"Authorization": "Bearer key"})
 
-    assert result is None
     assert node.parameter_output_values["generation_id"] == "gen-preserved"
     assert node.parameter_output_values["generation_status"] == STATUS_TIMED_OUT
 
@@ -85,13 +87,12 @@ def test_handle_terminal_status_preserves_generation_id_on_failure() -> None:
     node.parameter_output_values["generation_id"] = "gen-failed"
     node._set_safe_defaults = lambda: None  # type: ignore[method-assign]
 
-    is_terminal, terminal_result = node._handle_terminal_status(
-        STATUS_FAILED,
-        {"status": STATUS_FAILED, "status_detail": {"error": "boom", "details": "bad"}},
-    )
+    with pytest.raises(GenerationFailedError):
+        node._handle_terminal_status(
+            STATUS_FAILED,
+            {"status": STATUS_FAILED, "status_detail": {"error": "boom", "details": "bad"}},
+        )
 
-    assert is_terminal is True
-    assert terminal_result is None
     assert node.parameter_output_values["generation_id"] == "gen-failed"
     assert node.parameter_output_values["generation_status"] == STATUS_FAILED
 

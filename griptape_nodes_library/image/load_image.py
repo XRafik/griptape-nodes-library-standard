@@ -218,7 +218,7 @@ class LoadImage(SuccessFailureNode):
             input_source = "path parameter"
 
         if input_source is None:
-            error_details = "No image or path provided"
+            error_details = "Connect an image to 'Image' or set 'Path'."
             self._set_status_results(was_successful=False, result_details=f"FAILURE: {error_details}")
             self._handle_failure_exception(RuntimeError(error_details))
             return
@@ -267,7 +267,6 @@ class LoadImage(SuccessFailureNode):
         except Exception as e:
             error_details = f"Failed to load image from {input_source}: {e}"
             self._set_status_results(was_successful=False, result_details=f"FAILURE: {error_details}")
-            logger.error(f"LoadImage '{self.name}': {error_details}")
             self._handle_failure_exception(e)
 
     def _on_copy_to_project_clicked(
@@ -316,7 +315,7 @@ class LoadImage(SuccessFailureNode):
             # Attempt to load the image to verify it's valid
             load_pil_from_url(image_artifact.value)
         except Exception as e:
-            msg = f"Image verification failed - cannot load image: {e}"
+            msg = f"The image at {image_artifact.value} could not be loaded: {e}"
             raise RuntimeError(msg) from e
 
     def _extract_mask_if_possible(self) -> None:

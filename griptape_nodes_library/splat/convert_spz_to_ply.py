@@ -13,7 +13,7 @@ import numpy as np
 from griptape_nodes.exe_types.core_types import ParameterMode
 from griptape_nodes.exe_types.node_types import DataNode
 from griptape_nodes.exe_types.param_components.project_file_parameter import ProjectFileParameter
-from griptape_nodes.files.file import File, FileDestination, FileLoadError
+from griptape_nodes.files.file import File, FileDestination
 
 from griptape_nodes_library.splat.parameter_splat import ParameterSplat
 from griptape_nodes_library.splat.splat_artifact import SplatUrlArtifact
@@ -386,18 +386,12 @@ class ConvertSpzToPly(DataNode):
             )
             return
 
-        try:
-            spz_bytes = await File(url).aread_bytes()
-        except FileLoadError as exc:
-            raise RuntimeError(f"Failed to load SPZ from {url!r}: {exc}") from exc
+        spz_bytes = await File(url).aread_bytes()
 
         ply_bytes = await asyncio.to_thread(_spz_bytes_to_ply_bytes, spz_bytes)
 
         dest: FileDestination = self._output_file.build_file()
-        try:
-            saved = await dest.awrite_bytes(ply_bytes)
-        except Exception as exc:
-            raise RuntimeError(f"Failed to save PLY: {exc}") from exc
+        saved = await dest.awrite_bytes(ply_bytes)
 
         upstream_meta["format"] = "ply"
         self.parameter_output_values["splat_out"] = SplatUrlArtifact(

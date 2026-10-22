@@ -60,21 +60,26 @@ class KlingTextToVideoGeneration(GriptapeProxyNode):
         - result_details (str): Details about the generation result or error
     """
 
-    # Migrates values saved before the dropdown stored the provider's own model id: old
-    # display labels and catalog keys.
+    # Migrates values saved before the dropdown stored the provider's own model id (old
+    # display labels and catalog keys), plus models Kling has discontinued. Kling returns
+    # 404 for kling-v1-6, kling-v2-master, and kling-v2-1-master, so a saved workflow
+    # referencing one migrates to kling-v2-6 rather than calling through.
     LEGACY_MODEL_VALUES: ClassVar[dict[str, str]] = {
-        "Kling v1.6": "kling-v1-6",
-        "Kling v2 Master": "kling-v2-master",
-        "Kling v2.1 Master": "kling-v2-1-master",
+        "Kling v1.6": "kling-v2-6",
+        "Kling v2 Master": "kling-v2-6",
+        "Kling v2.1 Master": "kling-v2-6",
         "Kling v2.5 Turbo": "kling-v2-5-turbo",
         "Kling v2.6": "kling-v2-6",
         "Kling v3.0": "kling-v3",
-        "gtc_kling_v1_6": "kling-v1-6",
-        "gtc_kling_v2_1_master": "kling-v2-1-master",
+        "gtc_kling_v1_6": "kling-v2-6",
+        "gtc_kling_v2_1_master": "kling-v2-6",
         "gtc_kling_v2_5_turbo": "kling-v2-5-turbo",
         "gtc_kling_v2_6": "kling-v2-6",
-        "gtc_kling_v2_master": "kling-v2-master",
+        "gtc_kling_v2_master": "kling-v2-6",
         "gtc_kling_v3": "kling-v3",
+        "kling-v1-6": "kling-v2-6",
+        "kling-v2-1-master": "kling-v2-6",
+        "kling-v2-master": "kling-v2-6",
     }
 
     # Model capability definitions
@@ -86,24 +91,6 @@ class KlingTextToVideoGeneration(GriptapeProxyNode):
             "aspect_ratios": ["16:9", "9:16", "1:1"],
             "supports_sound": False,
             "supports_multi_shot": True,
-        },
-        "kling-v1-6": {
-            "modes": BASE_MODE_CHOICES,
-            "durations": [5, 10],
-            "aspect_ratios": ["16:9", "9:16", "1:1"],
-            "supports_sound": False,
-        },
-        "kling-v2-master": {
-            "modes": [],
-            "durations": [5, 10],
-            "aspect_ratios": ["16:9", "9:16", "1:1"],
-            "supports_sound": False,
-        },
-        "kling-v2-1-master": {
-            "modes": [],
-            "durations": [5, 10],
-            "aspect_ratios": ["16:9", "9:16", "1:1"],
-            "supports_sound": False,
         },
         "kling-v2-5-turbo": {
             "modes": BASE_MODE_CHOICES,
@@ -138,9 +125,6 @@ class KlingTextToVideoGeneration(GriptapeProxyNode):
                 "kling-v3",
                 "kling-v2-6",
                 "kling-v2-5-turbo",
-                "kling-v2-1-master",
-                "kling-v2-master",
-                "kling-v1-6",
             ],
             default_model="kling-v3",
             deprecated_values=self.LEGACY_MODEL_VALUES,
@@ -515,8 +499,7 @@ class KlingTextToVideoGeneration(GriptapeProxyNode):
             if not (1 <= len(widget_items) <= MAX_MULTI_PROMPT_COUNT):
                 exceptions.append(
                     ValueError(
-                        f"{self.name} shots must contain between 1 and {MAX_MULTI_PROMPT_COUNT} items "
-                        f"(got {len(widget_items)})."
+                        f"Shots must contain between 1 and {MAX_MULTI_PROMPT_COUNT} items (got {len(widget_items)})."
                     )
                 )
 
@@ -527,11 +510,11 @@ class KlingTextToVideoGeneration(GriptapeProxyNode):
                 component_duration = item["duration"]
 
                 if not component_prompt:
-                    exceptions.append(ValueError(f"{self.name} shot {shot_index} prompt must be a non-empty string."))
+                    exceptions.append(ValueError(f"Shot {shot_index} prompt must be a non-empty string."))
                 elif len(component_prompt) > MAX_PROMPT_LENGTH:
                     exceptions.append(
                         ValueError(
-                            f"{self.name} shot {shot_index} prompt exceeds {MAX_PROMPT_LENGTH} characters "
+                            f"Shot {shot_index} prompt exceeds {MAX_PROMPT_LENGTH} characters "
                             f"(got: {len(component_prompt)} characters)."
                         )
                     )
@@ -541,7 +524,7 @@ class KlingTextToVideoGeneration(GriptapeProxyNode):
                 except InvalidOperation:
                     exceptions.append(
                         ValueError(
-                            f"{self.name} shot {shot_index} has invalid duration '{component_duration}'. "
+                            f"Shot {shot_index} has invalid duration '{component_duration}'. "
                             "Expected a number-as-string."
                         )
                     )
@@ -549,14 +532,12 @@ class KlingTextToVideoGeneration(GriptapeProxyNode):
 
                 if component_duration_decimal < 1:
                     exceptions.append(
-                        ValueError(
-                            f"{self.name} shot {shot_index} duration must be at least 1 (got {component_duration})."
-                        )
+                        ValueError(f"Shot {shot_index} duration must be at least 1 (got {component_duration}).")
                     )
                 if component_duration_decimal != component_duration_decimal.to_integral_value():
                     exceptions.append(
                         ValueError(
-                            f"{self.name} shot {shot_index} duration must be an integer number of seconds "
+                            f"Shot {shot_index} duration must be an integer number of seconds "
                             f"(got {component_duration})."
                         )
                     )
@@ -564,25 +545,19 @@ class KlingTextToVideoGeneration(GriptapeProxyNode):
 
             if total_duration <= 0:
                 exceptions.append(
-                    ValueError(
-                        f"{self.name} multi-shot durations must sum to a value greater than 0 (got {total_duration})."
-                    )
+                    ValueError(f"Multi-shot durations must sum to a value greater than 0 (got {total_duration}).")
                 )
             return
 
         try:
             shot_count_int = int(shot_count)
         except (TypeError, ValueError):
-            exceptions.append(
-                ValueError(f"{self.name} shot_count must be an integer between 1 and {MAX_MULTI_PROMPT_COUNT}.")
-            )
+            exceptions.append(ValueError(f"'shot count' must be an integer between 1 and {MAX_MULTI_PROMPT_COUNT}."))
             shot_count_int = 1
 
         if not (1 <= shot_count_int <= MAX_MULTI_PROMPT_COUNT):
             exceptions.append(
-                ValueError(
-                    f"{self.name} shot_count must be between 1 and {MAX_MULTI_PROMPT_COUNT} (got {shot_count_int})."
-                )
+                ValueError(f"'shot count' must be between 1 and {MAX_MULTI_PROMPT_COUNT} (got {shot_count_int}).")
             )
         shot_count_int = max(1, min(MAX_MULTI_PROMPT_COUNT, shot_count_int))
 
@@ -593,17 +568,17 @@ class KlingTextToVideoGeneration(GriptapeProxyNode):
             component_duration = self.get_parameter_value(f"shot_{shot_index}_duration")
 
             if not component_prompt:
-                exceptions.append(ValueError(f"{self.name} shot {shot_index} prompt must be a non-empty string."))
+                exceptions.append(ValueError(f"Shot {shot_index} prompt must be a non-empty string."))
             elif len(component_prompt) > MAX_PROMPT_LENGTH:
                 exceptions.append(
                     ValueError(
-                        f"{self.name} shot {shot_index} prompt exceeds {MAX_PROMPT_LENGTH} characters "
+                        f"Shot {shot_index} prompt exceeds {MAX_PROMPT_LENGTH} characters "
                         f"(got: {len(component_prompt)} characters)."
                     )
                 )
 
             if not isinstance(component_duration, str):
-                exceptions.append(ValueError(f"{self.name} shot {shot_index} duration must be a string number."))
+                exceptions.append(ValueError(f"Shot {shot_index} duration must be a string number."))
                 continue
 
             try:
@@ -611,29 +586,26 @@ class KlingTextToVideoGeneration(GriptapeProxyNode):
             except InvalidOperation:
                 exceptions.append(
                     ValueError(
-                        f"{self.name} shot {shot_index} has invalid duration '{component_duration}'. "
-                        "Expected a number-as-string."
+                        f"Shot {shot_index} has invalid duration '{component_duration}'. Expected a number-as-string."
                     )
                 )
                 continue
 
             if component_duration_decimal < 1:
                 exceptions.append(
-                    ValueError(f"{self.name} shot {shot_index} duration must be at least 1 (got {component_duration}).")
+                    ValueError(f"Shot {shot_index} duration must be at least 1 (got {component_duration}).")
                 )
             if component_duration_decimal > requested_duration:
                 exceptions.append(
                     ValueError(
-                        f"{self.name} shot {shot_index} duration cannot exceed requested duration "
+                        f"Shot {shot_index} duration cannot exceed requested duration "
                         f"{duration} (got {component_duration})."
                     )
                 )
             total_duration += component_duration_decimal
 
         if total_duration != requested_duration:
-            exceptions.append(
-                ValueError(f"{self.name} multi-shot durations must sum to {duration} (got {total_duration}).")
-            )
+            exceptions.append(ValueError(f"Multi-shot durations must sum to {duration} (got {total_duration})."))
 
     async def _build_payload(self) -> dict[str, Any]:
         """Build the request payload for Kling API.
@@ -730,18 +702,16 @@ class KlingTextToVideoGeneration(GriptapeProxyNode):
 
         requires_prompt = model_id != V3_MODEL_ID or (not multi_shot) or shot_type == "intelligence"
         if requires_prompt and not prompt.strip():
-            exceptions.append(ValueError(f"{self.name} requires a prompt to generate video."))
+            exceptions.append(ValueError("A prompt is required to generate video. Enter one in 'prompt'."))
 
         if requires_prompt and len(prompt) > MAX_PROMPT_LENGTH:
             exceptions.append(
-                ValueError(
-                    f"{self.name} prompt exceeds {MAX_PROMPT_LENGTH} characters (got: {len(prompt)} characters)."
-                )
+                ValueError(f"'prompt' exceeds {MAX_PROMPT_LENGTH} characters (got: {len(prompt)} characters).")
             )
 
         if model_id == V3_MODEL_ID and multi_shot:
             if shot_type not in {"customize", "intelligence"}:
-                exceptions.append(ValueError(f"{self.name} shot_type must be 'customize' or 'intelligence'."))
+                exceptions.append(ValueError("'shot type' must be 'customize' or 'intelligence'."))
 
             if shot_type == "customize":
                 duration = self.get_parameter_value("duration") or 5
@@ -752,7 +722,7 @@ class KlingTextToVideoGeneration(GriptapeProxyNode):
         if negative_prompt and len(negative_prompt) > MAX_PROMPT_LENGTH:
             exceptions.append(
                 ValueError(
-                    f"{self.name} negative_prompt exceeds {MAX_PROMPT_LENGTH} characters (got: {len(negative_prompt)} characters)."
+                    f"'negative_prompt' exceeds {MAX_PROMPT_LENGTH} characters (got: {len(negative_prompt)} characters)."
                 )
             )
 
@@ -768,17 +738,14 @@ class KlingTextToVideoGeneration(GriptapeProxyNode):
         # Skip mode validation for no-mode models (modes: []) — mode is always pro internally
         if model_modes and mode not in model_modes:
             exceptions.append(
-                ValueError(
-                    f"{self.name}: Model {model_name} does not support mode '{mode}'. "
-                    f"Valid modes: {', '.join(model_modes)}"
-                )
+                ValueError(f"Model {model_name} does not support mode '{mode}'. Valid modes: {', '.join(model_modes)}")
             )
 
         if aspect_ratio not in capabilities.get("aspect_ratios", ["16:9", "9:16", "1:1"]):
             valid_ratios = capabilities.get("aspect_ratios", [])
             exceptions.append(
                 ValueError(
-                    f"{self.name}: Model {model_name} does not support aspect ratio '{aspect_ratio}'. "
+                    f"Model {model_name} does not support aspect ratio '{aspect_ratio}'. "
                     f"Valid aspect ratios: {', '.join(valid_ratios)}"
                 )
             )

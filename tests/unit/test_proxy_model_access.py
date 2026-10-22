@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
+from griptape_nodes.exe_types.core_types import NodeError
 from griptape_nodes.exe_types.param_components.model_access_component import ModelAccessComponent
 from griptape_nodes.node_library.library_registry import LibraryRegistry
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
@@ -56,6 +57,9 @@ type AuthorizationHook = Callable[[AuthorizationCheckpoint], CheckpointDenial | 
 # it has no case here.
 NODE_MODEL_CASES: list[tuple[str, str, str, str]] = [
     ("TranscribeAudio", "gtc_whisper_1", "whisper-1", "model"),  # only declared model
+    ("JevAskYesNo", "gtc_jev_preview", "jev-preview", "model"),
+    ("JevPickOne", "gtc_jev_preview", "jev-preview", "model"),
+    ("JevRate", "gtc_jev_preview", "jev-preview", "model"),
     ("ElevenLabsTextToSpeechGeneration", "gtc_eleven_multilingual_v2", "eleven_multilingual_v2", "model"),
     (
         "OmnihumanSubjectRecognition",
@@ -76,8 +80,8 @@ NODE_MODEL_CASES: list[tuple[str, str, str, str]] = [
     ("WanAnimateGeneration", "gtc_wan_2_2_animate_move", "wan2.2-animate-move", "model"),
     ("WanReferenceToVideoGeneration", "gtc_wan_2_6_r2v", "wan2.6-r2v", "model"),  # only declared model
     ("FluxImageGeneration", "gtc_flux_kontext_pro", "flux-kontext-pro", "model"),  # only declared model
-    ("QwenImageGeneration", "gtc_qwen_image_plus", "qwen-image-plus", "model"),
-    ("QwenImageEdit", "gtc_qwen_image_edit", "qwen-image-edit", "model"),
+    ("QwenImageGeneration", "gtc_qwen_image_3_0", "qwen-image-3.0", "model"),  # only declared model
+    ("QwenImageEdit", "gtc_qwen_image_3_0", "qwen-image-3.0", "model"),  # only declared model
     ("SeedreamImageGeneration", "gtc_seedream_4_0", "seedream-4-0-250828", "model"),
     ("GrokImageGeneration", "gtc_grok_imagine_image", "grok-imagine-image", "model"),  # only declared model
     ("GrokImageEdit", "gtc_grok_imagine_image", "grok-imagine-image", "model"),  # only declared model
@@ -99,7 +103,7 @@ NODE_MODEL_CASES: list[tuple[str, str, str, str]] = [
     ("LTXImageToVideoGeneration", "gtc_ltx_2_3_pro", "ltx-2-3-pro", "model"),
     ("LTXAudioToVideoGeneration", "gtc_ltx_2_3_pro", "ltx-2-3-pro", "model"),
     ("LTXVideoExtend", "gtc_ltx_2_pro", "ltx-2-pro", "model"),
-    ("LTXVideoRetake", "gtc_ltx_2_3_pro", "ltx-2-3-pro", "model"),
+    ("LTXVideoRetake", "gtc_ltx_2_3_pro", "ltx-2-3-pro", "model"),  # only declared model
     ("LTXVideoToVideoHDR", "gtc_ltx_2_3_pro", "ltx-2-3-pro", "model"),  # only declared model
 ]
 
@@ -221,7 +225,6 @@ async def test_begin_generation_gates_on_denial(monkeypatch: pytest.MonkeyPatch)
 
     async def fake_submit_generation(payload: dict[str, Any], headers: dict[str, str], api_model_id: str) -> None:
         submit_calls.append({"payload": payload, "headers": headers, "api_model_id": api_model_id})
-        # None short-circuits `_begin_generation` before it returns a generation id.
         return None
 
     monkeypatch.setattr(node, "_build_payload", fake_build_payload)
@@ -230,19 +233,22 @@ async def test_begin_generation_gates_on_denial(monkeypatch: pytest.MonkeyPatch)
     hook = _deny_hook(CheckpointAction.OFFER_MODEL, "gtc_sora_2_pro")
     GriptapeNodes.EventManager().add_authorization_hook(hook)
     try:
-        result = await node._begin_generation({})
+        # Nothing is wired to the failure output, so the denial is raised.
+        with pytest.raises(NodeError, match="denied for test"):
+            await node._begin_generation({})
     finally:
         GriptapeNodes.EventManager().remove_authorization_hook(hook)
 
-    assert result is None
     assert node.parameter_output_values.get("was_successful") is False
     assert "denied for test" in node.parameter_output_values.get("result_details", "")
     assert submit_calls == []
     assert build_calls == []
 
     # Mirror case: with the hook removed, the same selection is permitted again
-    # and the flow reaches `_build_payload` and then `_submit_generation`.
-    await node._begin_generation({})
+    # and the flow reaches `_build_payload` and then `_submit_generation`. The fake submit
+    # returns no generation id, which is itself a failure.
+    with pytest.raises(NodeError, match="did not return a generation ID"):
+        await node._begin_generation({})
 
     assert len(build_calls) == 1
     assert len(submit_calls) == 1

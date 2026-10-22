@@ -3,6 +3,7 @@ from griptape_nodes.retained_mode.griptape_nodes import logger
 from griptape_nodes.traits.button import Button, ButtonDetailsMessagePayload
 from griptape_nodes.traits.options import Options
 
+from griptape_nodes_library.llm.tools import ToolType
 from griptape_nodes_library.tools.base_tool import BaseTool
 from griptape_nodes_library.utils.mcp_utils import (
     get_available_mcp_servers,
@@ -85,12 +86,15 @@ class MCPToolNode(BaseTool):
         # Get MCP server configuration
         server_config = get_server_config(mcp_server_name)
         if server_config is None:
-            error_details = f"MCP server '{mcp_server_name}' not found or not enabled"
+            error_details = (
+                f"MCP server '{mcp_server_name}' was not found or is not enabled. "
+                "Enable it in Settings, or pick another server in 'Mcp Server Name'."
+            )
             logger.error(f"{self.name}: {error_details}")
-            return
+            raise ValueError(error_details)
 
         self.parameter_output_values["tool"] = {
-            "tool_type": "MCPTool",
+            "tool_type": ToolType.MCP.value,
             "mcp_server_name": mcp_server_name,
             "server_config": server_config,
             "rules": server_config.get("rules", ""),

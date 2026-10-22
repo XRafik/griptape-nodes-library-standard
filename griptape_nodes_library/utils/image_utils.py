@@ -296,21 +296,18 @@ def load_pil_from_url(url: str) -> Image.Image:
     url_lower = url.lower()
     if url_lower.endswith(".svg"):
         msg = f"SVG files are not supported by PIL. Cannot load vector graphics: {url}"
-        logger.error(msg)
         raise ValueError(msg)
 
     try:
         image_bytes = File(url).read_bytes()
     except FileLoadError as e:
         msg = f"Failed to load image from: {url}\nError: {e}"
-        logger.error(msg)
         raise ValueError(msg) from e
 
     # Check if content is SVG by looking at first few bytes
     content_start = image_bytes[:100].decode("utf-8", errors="ignore").lower()
     if "<svg" in content_start:
         msg = f"SVG files are not supported by PIL. Cannot load vector graphics: {url}"
-        logger.error(msg)
         raise ValueError(msg)
 
     try:
@@ -320,10 +317,8 @@ def load_pil_from_url(url: str) -> Image.Image:
             content_start = image_bytes[:100].decode("utf-8", errors="ignore").lower()
             if "<svg" in content_start:
                 msg = f"SVG files are not supported by PIL. Cannot load vector graphics: {url}"
-                logger.error(msg)
                 raise ValueError(msg) from e
         msg = f"Failed to load image from: {url}\nError: {e}"
-        logger.error(msg)
         raise ValueError(msg) from e
 
 
@@ -332,7 +327,7 @@ def load_pil_image_from_artifact(image: ImageUrlArtifact | ImageArtifact | str, 
 
     Args:
         image: ImageUrlArtifact, ImageArtifact, or str URL
-        context_name: Name for error messages (e.g., node name)
+        context_name: Name for log lines (e.g., node name)
 
     Returns:
         PIL Image object
@@ -342,8 +337,7 @@ def load_pil_image_from_artifact(image: ImageUrlArtifact | ImageArtifact | str, 
         ValueError: If image loading fails
     """
     if not isinstance(image, ImageUrlArtifact | ImageArtifact | str):
-        error_msg = f"{context_name}: Unsupported image type: {type(image).__name__}"
-        logger.warning(error_msg)
+        error_msg = f"Unsupported image type: {type(image).__name__}"
         raise TypeError(error_msg)
 
     try:
@@ -352,9 +346,11 @@ def load_pil_image_from_artifact(image: ImageUrlArtifact | ImageArtifact | str, 
         if isinstance(image, ImageArtifact):
             return Image.open(BytesIO(image.value))
         return load_pil_from_url(image)
+    except ValueError:
+        # load_pil_from_url already says which image failed and why.
+        raise
     except Exception as e:
-        error_msg = f"{context_name}: Failed to load image: {e}"
-        logger.warning(error_msg)
+        error_msg = f"Failed to load image: {e}"
         raise ValueError(error_msg) from e
 
 

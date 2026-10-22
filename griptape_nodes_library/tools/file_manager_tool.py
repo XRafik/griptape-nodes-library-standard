@@ -4,15 +4,17 @@ from urllib.parse import urlsplit
 import httpx
 from griptape.utils.griptape_cloud import griptape_cloud_url
 from griptape_nodes.drivers.cloud_credentials import BASE_URL_SETTING_NAME, DEFAULT_CLOUD_BASE_URL
-from griptape_nodes.exe_types.core_types import Parameter
+from griptape_nodes.exe_types.core_types import NodeError, Parameter
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 from griptape_nodes.traits.options import Options
 
+from griptape_nodes_library.llm.tools import ToolType
 from griptape_nodes_library.tools.base_tool import BaseTool
 from griptape_nodes_library.utils.cloud_credential_utils import (
     resolve_cloud_api_key,
 )
 from griptape_nodes_library.utils.griptape_cloud_headers import build_griptape_cloud_headers
+from griptape_nodes_library.utils.node_error_utils import error_fields, error_response, request_id_from_headers
 
 LOCATIONS = ["Workspace Directory", "GriptapeCloud"]
 
@@ -106,17 +108,38 @@ class FileManager(BaseTool):
             data = response.json()
             return [(bucket["name"], bucket["bucket_id"]) for bucket in data["buckets"]]
         except httpx.HTTPStatusError as e:
-            msg = f"Failed to fetch buckets from Griptape Cloud: {e}"
-            raise RuntimeError(msg) from e
+            raise self._bucket_list_error(e) from e
         except Exception as e:
             msg = f"Error fetching buckets: {e}"
             raise RuntimeError(msg) from e
+
+    @staticmethod
+    def _bucket_list_error(e: httpx.HTTPStatusError) -> NodeError:
+        try:
+            body = e.response.json()
+        except ValueError:
+            body = None
+        detail = body.get("detail") or body.get("error") if isinstance(body, dict) else None
+        reason = detail if isinstance(detail, str) and detail else e.response.reason_phrase
+        msg = f"Griptape Cloud could not list your buckets: {reason.rstrip('.')}."
+        return NodeError(
+            msg,
+            fields=error_fields(
+                status_code=e.response.status_code,
+                request_id=request_id_from_headers(e.response.headers),
+            ),
+            response=error_response(body),
+        )
 
     def process(self) -> None:
         off_prompt = self.parameter_values.get("off_prompt", True)
         file_location = cast("str", self.parameter_values.get("file_location"))
 
-        config: dict = {"tool_type": "FileManager", "off_prompt": off_prompt, "file_location": file_location}
+        config: dict = {
+            "tool_type": ToolType.FILE_MANAGER.value,
+            "off_prompt": off_prompt,
+            "file_location": file_location,
+        }
         if file_location == LOCATIONS[1]:
             bucket_name = cast("str", self.parameter_values.get("bucket_id"))
             bucket_id = dict(self.get_bucket_list()).get(bucket_name)
