@@ -2,20 +2,17 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
+from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
+from typing import Any, ClassVar
 
 from griptape.artifacts import ImageArtifact, ImageUrlArtifact
 from griptape.artifacts.video_url_artifact import VideoUrlArtifact
-from griptape_nodes.exe_types.core_types import Parameter, ParameterGroup, ParameterList, ParameterMode
-from griptape_nodes.exe_types.input_checks import (
-    check_mime_type,
-    check_size,
-    input_subject,
-    local_image_info,
-    local_size_bytes,
-)
+from griptape_nodes.exe_types.core_types import NodeError, Parameter, ParameterGroup, ParameterList, ParameterMode
+from griptape_nodes.exe_types.input_checks import check_mime_type, check_size, input_subject, local_image_info
+from griptape_nodes.exe_types.node_types import BaseNode
 from griptape_nodes.exe_types.param_components.model_access_component import ModelAccessComponent
 from griptape_nodes.exe_types.param_components.project_file_parameter import ProjectFileParameter
 from griptape_nodes.exe_types.param_components.seed_parameter import SeedParameter
@@ -25,6 +22,7 @@ from griptape_nodes.exe_types.param_types.parameter_image import ParameterImage
 from griptape_nodes.exe_types.param_types.parameter_int import ParameterInt
 from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
 from griptape_nodes.exe_types.param_types.parameter_video import ParameterVideo
+from griptape_nodes.exe_types.validators.base import MediaInfo, MediaNeed, NodeValidator, PreRunValidator
 from griptape_nodes.files.file import File, FileLoadError
 from griptape_nodes.traits.options import Options
 from griptape_nodes.traits.slider import Slider
@@ -64,6 +62,52 @@ class ReferenceType(StrEnum):
 # "You provide up to three images of a single person, character, or product." (reference-images
 # page above).
 MAX_REFERENCE_IMAGES: dict[ReferenceType, int] = {ReferenceType.ASSET: 3, ReferenceType.STYLE: 1}
+
+
+@dataclass(frozen=True)
+class VeoFrameImage(PreRunValidator):
+    """A start or last frame Google is certain to reject: not JPEG or PNG, or over 20 MB.
+
+    The format rule is on a different page from the size limit, so its error links that page rather
+    than the node's `input_limits_url()`. Google documents the 20 MB limit for image-to-video input,
+    so it applies to the frames only, and only to a frame in a format Google takes.
+    """
+
+    needs = frozenset({MediaNeed.SIZE, MediaNeed.IMAGE})
+
+    def check(self, value: Any, *, subject: str, media: MediaInfo, docs_url: str | None) -> NodeError | None:  # noqa: ARG002
+        error = check_mime_type(
+            media.mime_type, subject=subject, allowed=SUPPORTED_IMAGE_MIME_TYPES, docs_url=FRAME_FORMATS_URL
+        )
+        if error is not None:
+            return error
+        return check_size(media.size_bytes, maximum_bytes=MAX_FRAME_IMAGE_BYTES, subject=subject, docs_url=docs_url)
+
+
+class SentReferenceImagesFormat(NodeValidator):
+    """The format of each reference image the request sends. It drops those past the reference type's maximum."""
+
+    def check(
+        self,
+        node: BaseNode,
+        *,
+        media: Mapping[str, Sequence[MediaInfo]],  # noqa: ARG002
+        docs_url: str | None,  # noqa: ARG002
+    ) -> list[NodeError]:
+        reference_images = node.get_parameter_list_value("reference_images") or []
+        sent = reference_images[: _max_reference_images(node.get_parameter_value("reference_type"))]
+        errors: list[NodeError] = []
+        for position, image in enumerate(sent, start=1):
+            info = local_image_info(image)
+            error = check_mime_type(
+                info.mime_type if info else None,
+                subject=input_subject("reference images", noun="image", position=position),
+                allowed=SUPPORTED_IMAGE_MIME_TYPES,
+                docs_url=REFERENCE_IMAGES_URL,
+            )
+            if error:
+                errors.append(error)
+        return errors
 
 
 class ModelId(StrEnum):
@@ -120,6 +164,7 @@ class Veo3VideoGeneration(GriptapeProxyNode):
 
     SERVICE_NAME = "Griptape"
     API_KEY_NAME = "GT_CLOUD_API_KEY"
+    node_validators: ClassVar[list[NodeValidator]] = [SentReferenceImagesFormat()]
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -184,6 +229,7 @@ class Veo3VideoGeneration(GriptapeProxyNode):
                 allowed_modes={ParameterMode.INPUT},
                 hide_property=True,
                 ui_options={"display_name": "start frame"},
+                pre_run_validators=[VeoFrameImage()],
             )
         )
 
@@ -195,6 +241,7 @@ class Veo3VideoGeneration(GriptapeProxyNode):
                 allowed_modes={ParameterMode.INPUT},
                 hide_property=True,
                 ui_options={"display_name": "last frame"},
+                pre_run_validators=[VeoFrameImage()],
             )
         )
 
@@ -458,54 +505,8 @@ class Veo3VideoGeneration(GriptapeProxyNode):
             "sample_count": sample_count,
         }
 
-    def validate_before_node_run(self) -> list[Exception] | None:
-        exceptions = super().validate_before_node_run() or []
-
-        # Only the reference images the request sends are checked; it drops the rest.
-        reference_images = self.get_parameter_list_value("reference_images") or []
-        reference_images = reference_images[: _max_reference_images(self.get_parameter_value("reference_type"))]
-
-        for parameter in ("start_frame", "last_frame"):
-            image = self.get_parameter_value(parameter)
-            if not image:
-                continue
-            subject = input_subject(parameter.replace("_", " "), noun="image")
-            exceptions.extend(
-                self._input_image_errors(image, subject, formats_url=FRAME_FORMATS_URL, check_file_size=True)
-            )
-
-        for position, image in enumerate(reference_images, start=1):
-            subject = input_subject("reference images", noun="image", position=position)
-            exceptions.extend(
-                self._input_image_errors(image, subject, formats_url=REFERENCE_IMAGES_URL, check_file_size=False)
-            )
-
-        return exceptions or None
-
-    def _input_image_errors(
-        self, image: Any, subject: str, *, formats_url: str, check_file_size: bool
-    ) -> list[Exception]:
-        """The errors for one input image (frame or reference) Google is certain to reject, read without
-        any network call.
-
-        Google documents the 20 MB limit for image-to-video input, so it is checked on the start and
-        last frame only. `formats_url` is the page stating the JPEG/PNG rule for this kind of input.
-        """
-        info = local_image_info(image)
-        error = check_mime_type(
-            info.mime_type if info else None,
-            subject=subject,
-            allowed=SUPPORTED_IMAGE_MIME_TYPES,
-            docs_url=formats_url,
-        )
-        if error is None and check_file_size:
-            error = check_size(
-                local_size_bytes(image, kind="image"),
-                maximum_bytes=MAX_FRAME_IMAGE_BYTES,
-                subject=subject,
-                docs_url=INPUT_LIMITS_URL,
-            )
-        return [error] if error else []
+    def input_limits_url(self) -> str | None:
+        return INPUT_LIMITS_URL
 
     def _get_api_model_id(self) -> str:
         model_id = self.get_parameter_value("model_id") or ModelId.VEO_3_1_GENERATE_001.value

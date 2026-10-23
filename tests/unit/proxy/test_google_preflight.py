@@ -13,6 +13,8 @@ from typing import Any
 
 import pytest
 from griptape_nodes.exe_types.core_types import NodeError
+from griptape_nodes.exe_types.input_checks import input_check_readings
+from griptape_nodes.exe_types.pre_run_validation import run_pre_run_validators
 from griptape_nodes.node_library.library_registry import LibraryRegistry
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 from PIL import Image
@@ -46,8 +48,14 @@ def _node_module(node: Any) -> Any:
     return sys.modules[type(node).__module__]
 
 
+def _all_errors(node: Any) -> list[Exception]:
+    """What the engine reports at the node's turn: its pre-run validators', then its own checks'."""
+    with input_check_readings():
+        return [*run_pre_run_validators(node), *(node.validate_before_node_run() or [])]
+
+
 def _node_errors(node: Any) -> list[NodeError]:
-    return [e for e in node.validate_before_node_run() or [] if isinstance(e, NodeError)]
+    return [e for e in _all_errors(node) if isinstance(e, NodeError)]
 
 
 class TestGoogleImageGeneration:
@@ -59,7 +67,7 @@ class TestGoogleImageGeneration:
 
     def test_accepts_supported_images(self, node: Any) -> None:
         node.set_parameter_value("input_images", [_image_uri("PNG"), _image_uri("JPEG"), _image_uri("WEBP")])
-        assert node.validate_before_node_run() is None
+        assert _all_errors(node) == []
 
     def test_rejects_too_many_images(self, node: Any) -> None:
         node.set_parameter_value("input_images", [_image_uri()] * 10)
@@ -104,7 +112,7 @@ class TestGoogleImageGeneration:
         monkeypatch.setattr(_node_module(node), "MAX_IMAGE_SIZE_BYTES", 10)
         node.set_parameter_value("input_images", [_image_uri()])
 
-        assert node.validate_before_node_run() is None
+        assert _all_errors(node) == []
 
         node.set_parameter_value("auto_image_resize", False)
         errors = _node_errors(node)
@@ -117,11 +125,11 @@ class TestGoogleImageGeneration:
     ) -> None:
         monkeypatch.setattr(_node_module(node), "MAX_IMAGE_SIZE_BYTES", 10)
         node.set_parameter_value("input_images", [_image_uri("GIF")])
-        assert node.validate_before_node_run() is None
+        assert _all_errors(node) == []
 
     def test_skips_a_remote_image(self, node: Any) -> None:
         node.set_parameter_value("input_images", ["https://example.com/image.gif"])
-        assert node.validate_before_node_run() is None
+        assert _all_errors(node) == []
 
 
 class TestVeo3VideoGeneration:
@@ -134,7 +142,7 @@ class TestVeo3VideoGeneration:
     def test_accepts_supported_frames(self, node: Any) -> None:
         node.set_parameter_value("start_frame", _image_uri("PNG"))
         node.set_parameter_value("last_frame", _image_uri("JPEG"))
-        assert node.validate_before_node_run() is None
+        assert _all_errors(node) == []
 
     def test_rejects_an_unsupported_frame_format(self, node: Any) -> None:
         node.set_parameter_value("start_frame", _image_uri("WEBP"))
@@ -153,7 +161,7 @@ class TestVeo3VideoGeneration:
 
     def test_checks_only_the_asset_references_the_request_sends(self, node: Any) -> None:
         node.set_parameter_value("reference_images", [_image_uri()] * 3 + [_image_uri("GIF")])
-        assert node.validate_before_node_run() is None
+        assert _all_errors(node) == []
 
     def test_rejects_an_unsupported_reference_format(self, node: Any) -> None:
         node.set_parameter_value("reference_images", [_image_uri(), _image_uri("GIF")])
@@ -167,7 +175,7 @@ class TestVeo3VideoGeneration:
     def test_checks_only_the_style_reference_the_request_sends(self, node: Any) -> None:
         node.set_parameter_value("reference_type", "style")
         node.set_parameter_value("reference_images", [_image_uri("PNG"), _image_uri("GIF")])
-        assert node.validate_before_node_run() is None
+        assert _all_errors(node) == []
 
 
 class TestGeminiOmniFlashGeneration:
@@ -179,7 +187,7 @@ class TestGeminiOmniFlashGeneration:
 
     def test_accepts_supported_references(self, node: Any) -> None:
         node.set_parameter_value("reference_images", [_image_uri("PNG"), _image_uri("WEBP")])
-        assert node.validate_before_node_run() is None
+        assert _all_errors(node) == []
 
     def test_rejects_an_unsupported_reference_format(self, node: Any) -> None:
         node.set_parameter_value("reference_images", [_image_uri("GIF")])
@@ -197,4 +205,4 @@ class TestGeminiOmniFlashGeneration:
     def test_ignores_the_deprecated_image_when_references_are_connected(self, node: Any) -> None:
         node.set_parameter_value("reference_images", [_image_uri("PNG")])
         node.set_parameter_value("image", _image_uri("GIF"))
-        assert node.validate_before_node_run() is None
+        assert _all_errors(node) == []

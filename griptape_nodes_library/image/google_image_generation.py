@@ -4,20 +4,15 @@ import asyncio
 import base64
 import json
 import logging
-from dataclasses import dataclass, field
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from typing import Any, ClassVar
 
 from griptape.artifacts import ImageArtifact
 from griptape.artifacts.image_url_artifact import ImageUrlArtifact
-from griptape_nodes.exe_types.core_types import Parameter, ParameterGroup, ParameterList, ParameterMode
-from griptape_nodes.exe_types.input_checks import (
-    check_count,
-    check_mime_type,
-    check_size,
-    input_subject,
-    local_image_info,
-    local_size_bytes,
-)
+from griptape_nodes.exe_types.core_types import NodeError, Parameter, ParameterGroup, ParameterList, ParameterMode
+from griptape_nodes.exe_types.input_checks import check_count, check_mime_type, check_size
+from griptape_nodes.exe_types.node_types import BaseNode
 from griptape_nodes.exe_types.param_components.model_access_component import ModelAccessComponent
 from griptape_nodes.exe_types.param_components.project_file_parameter import ProjectFileParameter
 from griptape_nodes.exe_types.param_types.parameter_bool import ParameterBool
@@ -25,6 +20,7 @@ from griptape_nodes.exe_types.param_types.parameter_dict import ParameterDict
 from griptape_nodes.exe_types.param_types.parameter_float import ParameterFloat
 from griptape_nodes.exe_types.param_types.parameter_image import ParameterImage
 from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
+from griptape_nodes.exe_types.validators.base import MediaInfo, MediaNeed, NodeValidator, PreRunValidator
 from griptape_nodes.files.file import File, FileLoadError
 from griptape_nodes.traits.options import Options
 from griptape_nodes.utils.artifact_normalization import normalize_artifact_list
@@ -50,6 +46,57 @@ MAX_HUMAN_IMAGES = 5
 
 # "Maximum file size per file for inline data": 7 MB (same pages as above).
 MAX_IMAGE_SIZE_BYTES = 7 * 1024 * 1024
+# The image lists; together they hold at most MAX_INPUT_IMAGES.
+IMAGE_LIST_PARAMETERS = ("input_images", "object_images", "human_images")
+
+
+@dataclass(frozen=True)
+class GeminiInputImage(PreRunValidator):
+    """An input image Google is certain to reject: a format it doesn't take, or over 7 MB.
+
+    With 'Auto Image Resize' on, an oversized image is re-encoded to WEBP before sending, so neither
+    its size nor its source format is checked. With it off, both are, and the size error says to
+    turn it on.
+    """
+
+    needs = frozenset({MediaNeed.SIZE, MediaNeed.IMAGE})
+
+    auto_image_resize: bool = True
+
+    def selected(self, node: BaseNode) -> Sequence[PreRunValidator]:
+        return (replace(self, auto_image_resize=bool(node.get_parameter_value("auto_image_resize"))),)
+
+    def check(self, value: Any, *, subject: str, media: MediaInfo, docs_url: str | None) -> NodeError | None:  # noqa: ARG002
+        size_bytes = media.size_bytes
+        if self.auto_image_resize and size_bytes is not None and size_bytes > MAX_IMAGE_SIZE_BYTES:
+            return None
+        error = check_mime_type(media.mime_type, subject=subject, allowed=SUPPORTED_INPUT_MIME_TYPES, docs_url=docs_url)
+        if error is not None or self.auto_image_resize:
+            return error
+        return check_size(
+            size_bytes,
+            maximum_bytes=MAX_IMAGE_SIZE_BYTES,
+            subject=subject,
+            fix="Turn on 'Auto Image Resize' or use a smaller image.",
+            docs_url=docs_url,
+        )
+
+
+class TotalInputImages(NodeValidator):
+    """The most images Google takes across 'Input Images' and the deprecated image lists together."""
+
+    def check(
+        self,
+        node: BaseNode,
+        *,
+        media: Mapping[str, Sequence[MediaInfo]],  # noqa: ARG002
+        docs_url: str | None,
+    ) -> list[NodeError]:
+        total_images = sum(len(node.get_parameter_list_value(name) or []) for name in IMAGE_LIST_PARAMETERS)
+        error = check_count(
+            total_images, maximum=MAX_INPUT_IMAGES, parameter="Input Images", noun="images", docs_url=docs_url
+        )
+        return [error] if error else []
 
 
 @dataclass
@@ -69,6 +116,7 @@ class GoogleImageGeneration(GriptapeProxyNode):
     SERVICE_NAME = "Griptape"
     API_KEY_NAME = "GT_CLOUD_API_KEY"
     DEFAULT_MODEL: ClassVar[str] = "gemini-3-pro-image"
+    node_validators: ClassVar[list[NodeValidator]] = [TotalInputImages()]
     MODEL_OPTIONS: ClassVar[list[str]] = ["gemini-3-pro-image", "gemini-3.1-flash-image"]
     # Migrates values saved before this dropdown stored the provider's own model id
     # (friendly labels and catalog keys alike).
@@ -159,6 +207,7 @@ class GoogleImageGeneration(GriptapeProxyNode):
                 allowed_modes={ParameterMode.INPUT},
                 ui_options={"display_name": "Input Images", "expander": True, "hide_property": True},
                 max_items=MAX_INPUT_IMAGES,
+                pre_run_validators=[GeminiInputImage()],
             )
         )
 
@@ -172,6 +221,7 @@ class GoogleImageGeneration(GriptapeProxyNode):
                 allowed_modes={ParameterMode.INPUT},
                 ui_options={"display_name": "Object Images", "expander": True},
                 max_items=MAX_OBJECT_IMAGES,
+                pre_run_validators=[GeminiInputImage()],
                 hide=True,
             )
         )
@@ -186,6 +236,7 @@ class GoogleImageGeneration(GriptapeProxyNode):
                 allowed_modes={ParameterMode.INPUT},
                 ui_options={"display_name": "Human Images", "expander": True},
                 max_items=MAX_HUMAN_IMAGES,
+                pre_run_validators=[GeminiInputImage()],
                 hide=True,
             )
         )
@@ -351,66 +402,11 @@ class GoogleImageGeneration(GriptapeProxyNode):
         if not prompt:
             exceptions.append(ValueError("'Prompt' is empty. Describe the image you want."))
 
-        # Get all image lists
-        image_lists = {
-            "Input Images": self.get_parameter_list_value("input_images") or [],
-            "Object Images": self.get_parameter_list_value("object_images") or [],
-            "Human Images": self.get_parameter_list_value("human_images") or [],
-        }
-
-        # Validate combined image count does not exceed maximum
-        total_images = sum(len(images) for images in image_lists.values())
-        count_error = check_count(
-            total_images,
-            maximum=MAX_INPUT_IMAGES,
-            parameter="Input Images",
-            noun="images",
-            docs_url=self._input_limits_url(),
-        )
-        if count_error:
-            exceptions.append(count_error)
-
-        exceptions.extend(self._input_image_errors(image_lists))
-
         return exceptions or None
 
-    def _input_limits_url(self) -> str:
+    def input_limits_url(self) -> str | None:
         """Google's limits page for the selected model; the default model's page when the selection is unknown."""
         return INPUT_LIMITS_URLS.get(self._get_selected_model_id(), INPUT_LIMITS_URLS[self.DEFAULT_MODEL])
-
-    def _input_image_errors(self, image_lists: dict[str, list[Any]]) -> list[Exception]:
-        """One error per input image Google is certain to reject, read without any network call.
-
-        With 'Auto Image Resize' on, an oversized image is re-encoded to WEBP before sending, so
-        neither its size nor its source format is checked. With it off, both are.
-        """
-        auto_image_resize = self.get_parameter_value("auto_image_resize")
-        docs_url = self._input_limits_url()
-        errors: list[Exception] = []
-        for parameter, images in image_lists.items():
-            for position, image in enumerate(images, start=1):
-                subject = input_subject(parameter, noun="image", position=position)
-                size_bytes = local_size_bytes(image, kind="image")
-                if auto_image_resize and size_bytes is not None and size_bytes > MAX_IMAGE_SIZE_BYTES:
-                    continue
-                info = local_image_info(image)
-                error = check_mime_type(
-                    info.mime_type if info else None,
-                    subject=subject,
-                    allowed=SUPPORTED_INPUT_MIME_TYPES,
-                    docs_url=docs_url,
-                )
-                if error is None and not auto_image_resize:
-                    error = check_size(
-                        size_bytes,
-                        maximum_bytes=MAX_IMAGE_SIZE_BYTES,
-                        subject=subject,
-                        fix="Turn on 'Auto Image Resize' or use a smaller image.",
-                        docs_url=docs_url,
-                    )
-                if error:
-                    errors.append(error)
-        return errors
 
     async def _process_generation(self) -> None:
         await super()._process_generation()
