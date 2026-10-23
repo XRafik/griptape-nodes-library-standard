@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import subprocess
-import sys
 import wave
 from pathlib import Path
 from typing import Any
@@ -11,13 +10,14 @@ from typing import Any
 import pytest
 from griptape_nodes.exe_types import input_checks
 from griptape_nodes.exe_types.core_types import NodeError, ParameterList
-from griptape_nodes.exe_types.input_checks import AudioProbe, ImageInfo, VideoProbe
+from griptape_nodes.exe_types.input_checks import AudioProbe, ImageInfo, VideoProbe, input_check_readings
+from griptape_nodes.exe_types.pre_run_validation import run_pre_run_validators
 from PIL import Image
 
 from griptape_nodes_library.assets import ASSET_KIND_IMAGE, ASSET_KIND_VIDEO, create_provider_asset_reference
-from griptape_nodes_library.video import seedance_common
 from griptape_nodes_library.video.seedance_2_0_video_generation import Seedance20VideoGeneration
 from griptape_nodes_library.video.seedance_2_5_video_generation import Seedance25VideoGeneration, SeedanceTask
+from griptape_nodes_library.video.seedance_common import MAX_IMAGE_BYTES
 from griptape_nodes_library.video.seedance_video_generation import SeedanceVideoGeneration
 
 SEEDANCE_1_5_PRO = "seedance-1-5-pro-251215"
@@ -55,13 +55,39 @@ def audio_clips(monkeypatch: pytest.MonkeyPatch) -> dict[str, AudioProbe | None]
     def fake_probe(value: Any) -> AudioProbe | None:
         return probes.get(Path(str(value)).name, valid)
 
-    # The Seedance checks probe through seedance_common's import of the reader, so patch it there.
-    monkeypatch.setattr(seedance_common, "local_audio_probe", fake_probe)
+    # The validators probe through the engine's own reader, so patch it there.
+    monkeypatch.setattr(input_checks, "_probe_audio", fake_probe)
     return probes
 
 
+def _all_errors(node: Any) -> list[Exception]:
+    """What the engine reports at the node's turn: its pre-run validators', then its own checks'."""
+    with input_check_readings():
+        return [*run_pre_run_validators(node), *(node.validate_before_node_run() or [])]
+
+
 def _errors(node: Any) -> list[NodeError]:
-    return [e for e in node.validate_before_node_run() or [] if isinstance(e, NodeError)]
+    return [e for e in _all_errors(node) if isinstance(e, NodeError)]
+
+
+def _file_size(monkeypatch: pytest.MonkeyPatch, suffix: str, size_bytes: int) -> None:
+    """Make local files ending in `suffix` read as `size_bytes` long, without writing one that size."""
+    read_size = input_checks._read_size_bytes
+    monkeypatch.setattr(
+        input_checks,
+        "_read_size_bytes",
+        lambda location: size_bytes if location.endswith(suffix) else read_size(location),
+    )
+
+
+def _image_info(monkeypatch: pytest.MonkeyPatch, infos: dict[str, ImageInfo]) -> None:
+    """Make the local images with these file names read as these sizes, without building ones that large."""
+    read_info = input_checks._read_image_info
+    monkeypatch.setattr(
+        input_checks,
+        "_read_image_info",
+        lambda location: infos.get(Path(location).name) or read_info(location),
+    )
 
 
 def _messages(node: Any) -> list[str]:
@@ -93,8 +119,8 @@ def videos(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, VideoPr
     def fake_probe(value: Any) -> VideoProbe | None:
         return probes.get(Path(str(value)).name, valid)
 
-    # The Seedance checks probe through seedance_common's import of the reader, so patch it there.
-    monkeypatch.setattr(seedance_common, "local_video_probe", fake_probe)
+    # The validators probe through the engine's own reader, so patch it there.
+    monkeypatch.setattr(input_checks, "_probe_video", fake_probe)
     for name in ("a.mp4", "b.mp4", "c.mp4"):
         (tmp_path / name).write_bytes(b"video")
     return probes
@@ -156,17 +182,17 @@ class TestSeedanceVideoGeneration:
     def test_rejects_a_frame_over_the_largest_side(
         self, node: SeedanceVideoGeneration, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # A real 6001 px image is slow to build in a test; lower the limit instead.
-        monkeypatch.setattr(sys.modules[SeedanceVideoGeneration.__module__], "SEEDANCE_MAX_IMAGE_DIMENSION_PX", 1000)
+        # A real 6001 px image is slow to build in a test; have the reader report one instead.
+        _image_info(monkeypatch, {"1200x800.png": ImageInfo(6001, 4000, "image/png")})
         node.set_parameter_value("first_frame", _image(tmp_path, (1200, 800)))
         assert _messages(node) == [
-            "The image in 'First Frame' is 1200x800 and each side must be at most 1000 pixels. Resize it smaller."
+            "The image in 'First Frame' is 6001x4000 and each side must be at most 6000 pixels. Resize it smaller."
         ]
 
     def test_rejects_an_oversized_frame(
         self, node: SeedanceVideoGeneration, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(sys.modules[SeedanceVideoGeneration.__module__], "MAX_IMAGE_BYTES", 10)
+        _file_size(monkeypatch, ".png", 1024**3)
         node.set_parameter_value("first_frame", _image(tmp_path))
         messages = _messages(node)
         assert len(messages) == 1
@@ -220,12 +246,9 @@ class TestSeedanceVideoGeneration:
     def test_refuses_a_frame_of_exactly_30_mb(
         self, node: SeedanceVideoGeneration, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # BytePlus writes "less than 30 MB"; lower the limit to this image's size to keep the test fast.
-        image = _image(tmp_path)
-        monkeypatch.setattr(
-            sys.modules[SeedanceVideoGeneration.__module__], "MAX_IMAGE_BYTES", Path(image).stat().st_size
-        )
-        node.set_parameter_value("first_frame", image)
+        # BytePlus writes "less than 30 MB"; have the image read as exactly that rather than write one.
+        _file_size(monkeypatch, ".png", MAX_IMAGE_BYTES)
+        node.set_parameter_value("first_frame", _image(tmp_path))
         messages = _messages(node)
         assert len(messages) == 1
         assert "and it must be under" in messages[0]
@@ -256,7 +279,7 @@ class TestSeedance20:
         # The dropdown turns a value outside its choices into the default when it's set, so store one
         # directly to reach the guard behind it.
         node.parameter_values["input_mode"] = "Storyboard"
-        messages = [str(e) for e in node.validate_before_node_run() or []]
+        messages = [str(e) for e in _all_errors(node)]
         assert (
             "'Input Mode' is 'Storyboard', which isn't one of Text Only, First/Last Frame or Multimodal "
             "References. Choose one of them."
@@ -297,7 +320,7 @@ class TestSeedance20:
     def test_rejects_an_oversized_reference_image(
         self, references: Seedance20VideoGeneration, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(seedance_common, "MAX_IMAGE_BYTES", 10)
+        _file_size(monkeypatch, ".png", 1024**3)
         _set_list(references, "reference_images", [_image(tmp_path)])
         messages = _messages(references)
         assert len(messages) == 1
@@ -308,16 +331,20 @@ class TestSeedance20:
         self, references: Seedance20VideoGeneration, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # The node downscales a local image over 6000 px and re-encodes it before sending, so the
-        # original's format and file size don't reach BytePlus. Lower the cap to keep the test fast.
-        monkeypatch.setattr(seedance_common, "SEEDANCE_MAX_IMAGE_DIMENSION_PX", 1000)
-        monkeypatch.setattr(seedance_common, "MAX_IMAGE_BYTES", 10)
+        # original's format and file size don't reach BytePlus. Have the reader report images that
+        # large, and each file as 1 GB, rather than build them.
+        _image_info(
+            monkeypatch,
+            {"wide": ImageInfo(7200, 4800, "image/x-portable-pixmap"), "too-wide": ImageInfo(18000, 6000, "image/png")},
+        )
+        _file_size(monkeypatch, "wide", 1024**3)
         _set_list(
             references,
             "reference_images",
             [_image(tmp_path, (1200, 800), "PPM", name="wide"), _image(tmp_path, (3000, 1000), name="too-wide")],
         )
         assert _messages(references) == [
-            "Image 2 in 'Reference Images' is 3000x1000, which is too wide. "
+            "Image 2 in 'Reference Images' is 18000x6000, which is too wide. "
             "The aspect ratio must be between 1:2.5 and 2.5:1. Crop it."
         ]
 
@@ -410,7 +437,7 @@ class TestSeedance20:
         videos: dict[str, VideoProbe | None],  # noqa: ARG002
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        monkeypatch.setattr(seedance_common, "MAX_VIDEO_BYTES", 1)
+        _file_size(monkeypatch, ".mp4", 1024**3)
         references.set_parameter_value("reference_video_1", str(tmp_path / "a.mp4"))
         messages = _messages(references)
         assert len(messages) == 1
@@ -464,7 +491,7 @@ class TestSeedance20:
     def test_rejects_an_oversized_reference_audio_clip(
         self, references: Seedance20VideoGeneration, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(seedance_common, "MAX_AUDIO_BYTES", 10)
+        _file_size(monkeypatch, ".wav", 1024**3)
         _set_list(references, "reference_images", [_image(tmp_path)])
         _set_list(references, "reference_audio", [_audio(tmp_path)])
         messages = _messages(references)
@@ -757,7 +784,7 @@ class TestSeedance25:
     def test_rejects_an_oversized_reference_audio_clip(
         self, node: Seedance25VideoGeneration, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(seedance_common, "MAX_AUDIO_BYTES", 10)
+        _file_size(monkeypatch, ".wav", 1024**3)
         self._references(node)
         _set_list(node, "reference_audio", [_audio(tmp_path)])
         messages = _messages(node)

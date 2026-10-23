@@ -21,28 +21,30 @@ import io
 import json as _json
 import logging
 from abc import ABC
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import suppress
+from dataclasses import dataclass
 from typing import Any, NamedTuple
 from urllib.parse import urljoin, urlparse
 from uuid import uuid4
 
 import httpx
-from griptape_nodes.exe_types.core_types import NodeError, NodeErrorLink, Parameter, ParameterMode
-from griptape_nodes.exe_types.input_checks import (
-    LIMITS_LINK_LABEL,
-    check_duration,
-    check_mime_type,
-    check_size,
-    image_errors,
-    local_audio_probe,
-    local_image_info,
-    local_size_bytes,
-    local_video_probe,
-    video_errors,
-)
+from griptape_nodes.exe_types.core_types import NodeError, NodeErrorLink, Parameter, ParameterList, ParameterMode
+from griptape_nodes.exe_types.input_checks import LIMITS_LINK_LABEL
+from griptape_nodes.exe_types.node_types import BaseNode
 from griptape_nodes.exe_types.param_components.artifact_url.public_artifact_url_parameter import (
     PublicArtifactUrlParameter,
+)
+from griptape_nodes.exe_types.validators.base import MediaInfo, MediaNeed, NodeValidator, PreRunValidator
+from griptape_nodes.exe_types.validators.media import (
+    AllowedFormats,
+    AspectRatioRange,
+    Duration,
+    FrameRate,
+    MaxFileSize,
+    PixelArea,
+    SideRange,
+    VideoCodecs,
 )
 from griptape_nodes.files.file import File, FileLoadError
 from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
@@ -87,15 +89,17 @@ __all__ = [
     "SUPPORTED_VIDEO_MIME_TYPES",
     "TALLEST_ASPECT_RATIO",
     "WIDEST_ASPECT_RATIO",
+    "SEEDANCE_SENT_IMAGE_LIMITS",
+    "SeedanceLimit",
     "SeedanceProxyNode",
+    "TotalDuration",
     "coerce_video_url",
     "downscale_oversized_image_data_uri",
     "downscale_oversized_image_file",
     "normalize_audio_data_uri_subtype",
     "parse_provider_response",
-    "seedance_image_errors",
-    "seedance_reference_audio_errors",
-    "seedance_reference_video_errors",
+    "seedance_reference_audio_limits",
+    "seedance_reference_video_limits",
     "summarize_media_input",
 ]
 
@@ -266,120 +270,164 @@ def downscale_oversized_image_file(path: str) -> DownscaledImage | None:
         return None
 
 
-def seedance_image_errors(image: Any, *, subject: str, docs_url: str) -> list[NodeError]:
-    """One error per BytePlus limit an image the Seedance 2.0 or 2.5 node sends breaks.
+@dataclass(frozen=True)
+class SeedanceLimit(PreRunValidator):
+    """One BytePlus limit, checked only on media the request sends as it is.
 
-    A private-asset reference is sent as an ``asset://`` ID, so it isn't checked. An image over
-    SEEDANCE_MAX_IMAGE_DIMENSION_PX is downscaled and re-encoded as PNG or JPEG before it's sent
-    (see `SeedanceProxyNode._prepare_frame_url_async`), so for one only the limits a resize keeps
-    are checked: the shortest side and the aspect ratio.
-    """
-    if is_provider_asset_reference(image):
-        return []
-    info = local_image_info(image)
-    if info is not None and max(info.width, info.height) > SEEDANCE_MAX_IMAGE_DIMENSION_PX:
-        return image_errors(
-            image,
-            subject=subject,
-            min_side=MIN_IMAGE_SIDE,
-            widest=WIDEST_ASPECT_RATIO,
-            tallest=TALLEST_ASPECT_RATIO,
-            docs_url=docs_url,
-        )
-    return image_errors(
-        image,
-        subject=subject,
-        allowed_mime_types=SUPPORTED_IMAGE_MIME_TYPES + HEIF_IMAGE_MIME_TYPES,
-        maximum_bytes=MAX_IMAGE_BYTES,
-        strict_maximum_bytes=True,
-        min_side=MIN_IMAGE_SIDE,
-        widest=WIDEST_ASPECT_RATIO,
-        tallest=TALLEST_ASPECT_RATIO,
-        docs_url=docs_url,
-    )
-
-
-def seedance_reference_video_errors(  # noqa: PLR0913
-    videos: Sequence[tuple[str, Any]],
-    *,
-    min_seconds: float,
-    max_seconds: float,
-    max_total_seconds: float,
-    parameters: str,
-    docs_url: str,
-) -> list[NodeError]:
-    """One error per BytePlus limit the reference videos break, each on its own and together.
-
-    Each video is probed once, for its own checks and for the total. The total is checked only
-    when there are two or more videos (for one, its own maximum is the same number) and every
-    video's duration could be read. It sums each video's shorter reading, the one its own maximum
-    is checked against.
+    A private-asset reference is sent as an ``asset://`` ID, so no limit is checked on it. An image
+    over SEEDANCE_MAX_IMAGE_DIMENSION_PX is downscaled and re-encoded as PNG or JPEG before the
+    Seedance 2.0 and 2.5 nodes send it (see `SeedanceProxyNode._prepare_frame_url_async`), so for
+    one only the limits a resize keeps apply: the shortest side and the aspect ratio. Pass
+    `kept_on_downscale=False` for the others.
 
     Args:
-        videos: Each video with its subject, from `input_subject`.
-        min_seconds: The shortest video accepted.
-        max_seconds: The longest video accepted.
-        max_total_seconds: The longest the videos may be together.
-        parameters: The parameters holding the videos as the UI shows them, quoted, such as
-            "'Reference Videos'".
-        docs_url: The provider's page documenting the limits.
+        limit: The engine validator to run.
+        kept_on_downscale: Whether the limit still applies to an image the node downscales.
     """
-    errors: list[NodeError | None] = []
-    durations: list[float | None] = []
-    for subject, video in videos:
-        # A private-asset reference is sent as an asset:// ID, so it isn't checked.
-        if is_provider_asset_reference(video):
-            durations.append(None)
-            continue
-        probe = local_video_probe(video)
-        durations.append(probe.shortest_seconds if probe else None)
-        errors += video_errors(
-            video,
-            subject=subject,
-            maximum_bytes=MAX_VIDEO_BYTES,
-            allowed_mime_types=SUPPORTED_VIDEO_MIME_TYPES,
-            allowed_codecs=SUPPORTED_VIDEO_CODECS,
-            min_seconds=min_seconds,
-            max_seconds=max_seconds,
-            min_side=MIN_VIDEO_SIDE,
-            max_side=MAX_VIDEO_SIDE,
-            min_megapixels=MIN_VIDEO_MEGAPIXELS,
-            max_megapixels=MAX_VIDEO_MEGAPIXELS,
-            widest=WIDEST_ASPECT_RATIO,
-            tallest=TALLEST_ASPECT_RATIO,
-            min_fps=MIN_VIDEO_FPS,
-            max_fps=MAX_VIDEO_FPS,
-            docs_url=docs_url,
-            probe=probe,
-        )
-    errors.append(
-        _total_duration_error(
-            durations,
-            max_total_seconds=max_total_seconds,
-            what=f"the videos in {parameters}",
-            fix="Use a Trim Video node to shorten one, or remove one.",
-            docs_url=docs_url,
+
+    # Whatever `limit` reads: the file size, and the reading of the kind the parameter holds.
+    needs = frozenset({MediaNeed.SIZE, MediaNeed.IMAGE, MediaNeed.VIDEO, MediaNeed.AUDIO})
+
+    limit: PreRunValidator
+    kept_on_downscale: bool = True
+
+    def candidates(self) -> Sequence[PreRunValidator]:
+        return (self.limit,)
+
+    def check(self, value: Any, *, subject: str, media: MediaInfo, docs_url: str | None) -> NodeError | None:
+        if is_provider_asset_reference(value):
+            return None
+        if not self.kept_on_downscale and _is_downscaled(media):
+            return None
+        return self.limit.check(value, subject=subject, media=media, docs_url=docs_url)
+
+
+def _is_downscaled(media: MediaInfo) -> bool:
+    """Whether an image is over SEEDANCE_MAX_IMAGE_DIMENSION_PX, so the node downscales it before sending."""
+    return media.image is not None and max(media.image.width, media.image.height) > SEEDANCE_MAX_IMAGE_DIMENSION_PX
+
+
+# The limits on an image the Seedance 2.0 or 2.5 node sends, which it downscales when it's over
+# SEEDANCE_MAX_IMAGE_DIMENSION_PX.
+SEEDANCE_SENT_IMAGE_LIMITS = (
+    SeedanceLimit(AllowedFormats(*SUPPORTED_IMAGE_MIME_TYPES, *HEIF_IMAGE_MIME_TYPES), kept_on_downscale=False),
+    SeedanceLimit(MaxFileSize(MAX_IMAGE_BYTES, strict=True), kept_on_downscale=False),
+    SeedanceLimit(SideRange(min=MIN_IMAGE_SIDE)),
+    SeedanceLimit(AspectRatioRange(TALLEST_ASPECT_RATIO, WIDEST_ASPECT_RATIO)),
+)
+
+
+def seedance_reference_video_limits(*, min_seconds: float, max_seconds: float) -> tuple[SeedanceLimit, ...]:
+    """The BytePlus limits on each reference video the Seedance 2.0 or 2.5 node sends."""
+    return tuple(
+        SeedanceLimit(limit)
+        for limit in (
+            MaxFileSize(MAX_VIDEO_BYTES),
+            AllowedFormats(*SUPPORTED_VIDEO_MIME_TYPES),
+            VideoCodecs(*SUPPORTED_VIDEO_CODECS),
+            Duration(min=min_seconds, max=max_seconds),
+            SideRange(min=MIN_VIDEO_SIDE, max=MAX_VIDEO_SIDE),
+            PixelArea(min_megapixels=MIN_VIDEO_MEGAPIXELS, max_megapixels=MAX_VIDEO_MEGAPIXELS),
+            AspectRatioRange(TALLEST_ASPECT_RATIO, WIDEST_ASPECT_RATIO),
+            FrameRate(min=MIN_VIDEO_FPS, max=MAX_VIDEO_FPS),
         )
     )
-    return [error for error in errors if error]
 
 
-def _total_duration_error(
-    durations: Sequence[float | None], *, max_total_seconds: float, what: str, fix: str, docs_url: str
-) -> NodeError | None:
-    """The error for clips longer together than BytePlus allows, or None.
+def seedance_reference_audio_limits(*, min_seconds: float, max_seconds: float) -> tuple[SeedanceLimit, ...]:
+    """The BytePlus limits on each reference audio clip the Seedance 2.0 or 2.5 node sends."""
+    return tuple(
+        SeedanceLimit(limit)
+        for limit in (
+            AllowedFormats(*SUPPORTED_AUDIO_MIME_TYPES),
+            MaxFileSize(MAX_AUDIO_BYTES),
+            # Too long says to trim it in an audio editor, and too short to use a longer clip.
+            Duration(min=min_seconds, max=max_seconds),
+        )
+    )
+
+
+class TotalDuration(NodeValidator):
+    """Reference clips longer together than BytePlus allows.
 
     Checked only for two or more clips (for one, its own maximum is the same number) when every
-    clip's duration was read.
+    clip's duration was read. It sums each clip's shorter reading, the one its own maximum is
+    checked against, from what the parameter validators already read. A private-asset reference
+    is sent as an ``asset://`` ID, so its duration counts as unknown and the total isn't checked.
+
+    Args:
+        parameters: The parameters holding the clips, each with its name as the UI shows it.
+        max_total_seconds: The longest the clips may be together.
+        what: The clips, for the message, such as "videos" or "clips".
+        fix: What the artist can do about it.
+        applies: Whether the node sends these clips now; the total is checked only when it does.
     """
-    known = [seconds for seconds in durations if seconds is not None]
-    if len(durations) < 2 or len(known) < len(durations) or sum(known) <= max_total_seconds:  # noqa: PLR2004
+
+    def __init__(
+        self,
+        parameters: Mapping[str, str],
+        *,
+        max_total_seconds: float,
+        what: str,
+        fix: str,
+        applies: Callable[[BaseNode], bool],
+    ) -> None:
+        self._parameters = dict(parameters)
+        self._max_total_seconds = max_total_seconds
+        self._what = what
+        self._fix = fix
+        self._applies = applies
+
+    def check(
+        self, node: BaseNode, *, media: Mapping[str, Sequence[MediaInfo]], docs_url: str | None
+    ) -> list[NodeError]:
+        if not self._applies(node):
+            return []
+        durations: list[float | None] = []
+        connected: list[str] = []
+        for parameter, shown_name in self._parameters.items():
+            clips = [
+                (value, info)
+                for value, info in zip(_values(node, parameter), media.get(parameter, ()), strict=False)
+                if value
+            ]
+            if clips:
+                connected.append(f"'{shown_name}'")
+            durations.extend(
+                None if is_provider_asset_reference(value) else _shortest_seconds(info) for value, info in clips
+            )
+        known = [seconds for seconds in durations if seconds is not None]
+        if len(durations) < 2 or len(known) < len(durations) or sum(known) <= self._max_total_seconds:  # noqa: PLR2004
+            return []
+        message = (
+            f"Together, the {self._what} in {_join_and(connected)} are "
+            f"{_seconds_past(sum(known), self._max_total_seconds)} seconds long and the limit is "
+            f"{self._max_total_seconds:g} seconds in total. {self._fix}"
+        )
+        links = [NodeErrorLink(label=LIMITS_LINK_LABEL, url=docs_url)] if docs_url else None
+        return [NodeError(message, links=links)]
+
+
+def _values(node: BaseNode, parameter: str) -> list[Any]:
+    """A parameter's values in the order the engine read them: a list's items, or the one value."""
+    if isinstance(node.get_parameter_by_name(parameter), ParameterList):
+        return node.get_parameter_list_value(parameter)
+    return [node.get_parameter_value(parameter)]
+
+
+def _shortest_seconds(info: MediaInfo) -> float | None:
+    """A clip's shorter duration reading, or None when it wasn't read."""
+    probe = info.video or info.audio
+    if probe is None:
         return None
-    return NodeError(
-        f"Together, {what} are {_seconds_past(sum(known), max_total_seconds)} seconds long and the limit is "
-        f"{max_total_seconds:g} seconds in total. {fix}",
-        links=[NodeErrorLink(label=LIMITS_LINK_LABEL, url=docs_url)],
-    )
+    return probe.shortest_seconds
+
+
+def _join_and(names: list[str]) -> str:
+    """Names joined for a message: "'A'", "'A' and 'B'", "'A', 'B' and 'C'"."""
+    if len(names) <= 1:
+        return "".join(names)
+    return f"{', '.join(names[:-1])} and {names[-1]}"
 
 
 def _seconds_past(seconds: float, limit: float) -> str:
@@ -389,78 +437,6 @@ def _seconds_past(seconds: float, limit: float) -> str:
         if float(text) > limit:
             return text
     return repr(seconds)
-
-
-def seedance_reference_audio_errors(  # noqa: PLR0913
-    clips: Sequence[tuple[str, Any]],
-    *,
-    min_seconds: float,
-    max_seconds: float,
-    max_total_seconds: float,
-    parameters: str,
-    docs_url: str,
-) -> list[NodeError]:
-    """One error per BytePlus limit the reference audio clips break, each on its own and together.
-
-    Each clip is probed once, for its format, its duration and the total; its size is read from the
-    file. A maximum and the total use a clip's shorter reading, and a minimum its longer one.
-
-    Args:
-        clips: Each clip with its subject, from `input_subject`.
-        min_seconds: The shortest clip accepted.
-        max_seconds: The longest clip accepted.
-        max_total_seconds: The longest the clips may be together.
-        parameters: The parameter holding the clips as the UI shows it, quoted, such as
-            "'Reference Audio'".
-        docs_url: The provider's page documenting the limits.
-    """
-    errors: list[NodeError | None] = []
-    durations: list[float | None] = []
-    for subject, audio in clips:
-        # A private-asset reference is sent as an asset:// ID, so it isn't checked.
-        if is_provider_asset_reference(audio):
-            durations.append(None)
-            continue
-        probe = local_audio_probe(audio)
-        durations.append(probe.shortest_seconds if probe else None)
-        errors += [
-            check_mime_type(
-                probe.mime_type if probe else None,
-                subject=subject,
-                allowed=SUPPORTED_AUDIO_MIME_TYPES,
-                docs_url=docs_url,
-            ),
-            check_size(
-                local_size_bytes(audio, kind="audio"),
-                maximum_bytes=MAX_AUDIO_BYTES,
-                subject=subject,
-                docs_url=docs_url,
-            ),
-            check_duration(
-                probe.longest_seconds if probe else None,
-                subject=subject,
-                minimum=min_seconds,
-                fix="Use a longer clip.",
-                docs_url=docs_url,
-            ),
-            check_duration(
-                probe.shortest_seconds if probe else None,
-                subject=subject,
-                maximum=max_seconds,
-                fix="Trim it in an audio editor.",
-                docs_url=docs_url,
-            ),
-        ]
-    errors.append(
-        _total_duration_error(
-            durations,
-            max_total_seconds=max_total_seconds,
-            what=f"the clips in {parameters}",
-            fix="Trim one in an audio editor, or remove one.",
-            docs_url=docs_url,
-        )
-    )
-    return [error for error in errors if error]
 
 
 def coerce_video_url(val: Any) -> str | None:

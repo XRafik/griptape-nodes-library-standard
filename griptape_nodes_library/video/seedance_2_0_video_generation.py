@@ -7,8 +7,7 @@ from typing import Any, ClassVar
 from griptape.artifacts import AudioArtifact, ImageArtifact, ImageUrlArtifact
 from griptape.artifacts.audio_url_artifact import AudioUrlArtifact
 from griptape.artifacts.video_url_artifact import VideoUrlArtifact
-from griptape_nodes.exe_types.core_types import NodeError, Parameter, ParameterGroup, ParameterList, ParameterMode
-from griptape_nodes.exe_types.input_checks import input_subject
+from griptape_nodes.exe_types.core_types import Parameter, ParameterGroup, ParameterList, ParameterMode
 from griptape_nodes.exe_types.node_types import BaseNode
 from griptape_nodes.exe_types.param_components.artifact_url.public_artifact_url_parameter import (
     PublicArtifactUrlParameter,
@@ -21,6 +20,8 @@ from griptape_nodes.exe_types.param_types.parameter_image import ParameterImage
 from griptape_nodes.exe_types.param_types.parameter_int import ParameterInt
 from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
 from griptape_nodes.exe_types.param_types.parameter_video import ParameterVideo
+from griptape_nodes.exe_types.validators.base import NodeValidator
+from griptape_nodes.exe_types.validators.common import ByParameter
 from griptape_nodes.traits.options import Options
 from griptape_nodes.utils.artifact_normalization import normalize_artifact_input, normalize_artifact_list
 
@@ -34,11 +35,12 @@ from griptape_nodes_library.assets import (
 )
 from griptape_nodes_library.proxy import ArtifactKind
 from griptape_nodes_library.video.seedance_common import (
+    SEEDANCE_SENT_IMAGE_LIMITS,
     SeedanceProxyNode,
+    TotalDuration,
     coerce_video_url,
-    seedance_image_errors,
-    seedance_reference_audio_errors,
-    seedance_reference_video_errors,
+    seedance_reference_audio_limits,
+    seedance_reference_video_limits,
 )
 
 logger = logging.getLogger("griptape_nodes")
@@ -48,6 +50,7 @@ __all__ = ["Seedance20VideoGeneration"]
 INPUT_MODE_TEXT_ONLY = "Text Only"
 INPUT_MODE_FIRST_LAST_FRAME = "First/Last Frame"
 INPUT_MODE_MULTIMODAL_REFERENCES = "Multimodal References"
+INPUT_MODES = (INPUT_MODE_TEXT_ONLY, INPUT_MODE_FIRST_LAST_FRAME, INPUT_MODE_MULTIMODAL_REFERENCES)
 MODEL_NAME_SEEDANCE_2_0 = "dreamina-seedance-2-0-260128"
 MODEL_NAME_SEEDANCE_2_0_FAST = "dreamina-seedance-2-0-fast-260128"
 MODEL_NAME_SEEDANCE_2_0_MINI = "dreamina-seedance-2-0-mini-260615"
@@ -74,6 +77,31 @@ REFERENCE_VIDEO_PARAMETERS = {
     "reference_video_2": "Reference Video 2",
     "reference_video_3": "Reference Video 3",
 }
+
+# First/Last Frame mode sends only the frames, Multimodal References mode only the references, and
+# Text Only nothing; media the mode doesn't send is reported by `_validate_parameters`.
+FRAME_LIMITS = ByParameter("input_mode", {INPUT_MODE_FIRST_LAST_FRAME: SEEDANCE_SENT_IMAGE_LIMITS})
+REFERENCE_IMAGE_LIMITS = ByParameter("input_mode", {INPUT_MODE_MULTIMODAL_REFERENCES: SEEDANCE_SENT_IMAGE_LIMITS})
+REFERENCE_VIDEO_LIMITS = ByParameter(
+    "input_mode",
+    {
+        INPUT_MODE_MULTIMODAL_REFERENCES: seedance_reference_video_limits(
+            min_seconds=MIN_REFERENCE_VIDEO_SECONDS, max_seconds=MAX_REFERENCE_VIDEO_SECONDS
+        )
+    },
+)
+REFERENCE_AUDIO_LIMITS = ByParameter(
+    "input_mode",
+    {
+        INPUT_MODE_MULTIMODAL_REFERENCES: seedance_reference_audio_limits(
+            min_seconds=MIN_REFERENCE_AUDIO_SECONDS, max_seconds=MAX_REFERENCE_AUDIO_SECONDS
+        )
+    },
+)
+
+
+def _sends_references(node: BaseNode) -> bool:
+    return node.get_parameter_value("input_mode") == INPUT_MODE_MULTIMODAL_REFERENCES
 
 
 @dataclass(frozen=True)
@@ -118,13 +146,6 @@ _DEFAULT_MODEL_CAPABILITIES = SeedanceModelCapabilities(
 )
 
 
-def _join_and(names: list[str]) -> str:
-    """Names joined for a message: "'A'", "'A' and 'B'", "'A', 'B' and 'C'"."""
-    if len(names) <= 1:
-        return "".join(names)
-    return f"{', '.join(names[:-1])} and {names[-1]}"
-
-
 def _get_model_capabilities(model_id: str) -> SeedanceModelCapabilities:
     """Return the capability record for a provider model id, defaulting safely if unknown."""
     return SEEDANCE_MODEL_CAPABILITIES.get(model_id, _DEFAULT_MODEL_CAPABILITIES)
@@ -163,6 +184,22 @@ class Seedance20VideoGeneration(SeedanceProxyNode):
 
     # Migrates values saved before the dropdown stored the provider's own model id: old
     # display labels and catalog keys.
+    node_validators: ClassVar[list[NodeValidator]] = [
+        TotalDuration(
+            REFERENCE_VIDEO_PARAMETERS,
+            max_total_seconds=MAX_TOTAL_REFERENCE_VIDEO_SECONDS,
+            what="videos",
+            fix="Use a Trim Video node to shorten one, or remove one.",
+            applies=_sends_references,
+        ),
+        TotalDuration(
+            {"reference_audio": "Reference Audio"},
+            max_total_seconds=MAX_TOTAL_REFERENCE_AUDIO_SECONDS,
+            what="clips",
+            fix="Trim one in an audio editor, or remove one.",
+            applies=_sends_references,
+        ),
+    ]
     LEGACY_MODEL_VALUES: ClassVar[dict[str, str]] = {
         "Seedance 2.0": MODEL_NAME_SEEDANCE_2_0,
         "Seedance 2.0 Fast": MODEL_NAME_SEEDANCE_2_0_FAST,
@@ -237,6 +274,7 @@ class Seedance20VideoGeneration(SeedanceProxyNode):
                 allowed_modes={ParameterMode.INPUT},
                 hide_property=True,
                 ui_options={"display_name": "First Frame"},
+                pre_run_validators=[FRAME_LIMITS],
             )
         )
 
@@ -248,6 +286,7 @@ class Seedance20VideoGeneration(SeedanceProxyNode):
                 allowed_modes={ParameterMode.INPUT},
                 hide_property=True,
                 ui_options={"display_name": "Last Frame"},
+                pre_run_validators=[FRAME_LIMITS],
             )
         )
 
@@ -261,6 +300,7 @@ class Seedance20VideoGeneration(SeedanceProxyNode):
                 allowed_modes={ParameterMode.INPUT},
                 ui_options={"display_name": "Reference Images", "expander": True, "hide_property": True},
                 max_items=9,
+                pre_run_validators=[REFERENCE_IMAGE_LIMITS],
             )
         )
 
@@ -278,6 +318,7 @@ class Seedance20VideoGeneration(SeedanceProxyNode):
                 allowed_modes={ParameterMode.INPUT},
                 ui_options={"display_name": "Reference Video 1"},
                 hide_property=True,
+                pre_run_validators=[REFERENCE_VIDEO_LIMITS],
             ),
             disclaimer_message="The Seedance 2.0 service utilizes this URL to access the reference video.",
         )
@@ -297,6 +338,7 @@ class Seedance20VideoGeneration(SeedanceProxyNode):
                 allowed_modes={ParameterMode.INPUT},
                 ui_options={"display_name": "Reference Video 2"},
                 hide_property=True,
+                pre_run_validators=[REFERENCE_VIDEO_LIMITS],
                 hide=True,
             ),
             disclaimer_message="The Seedance 2.0 service utilizes this URL to access the reference video.",
@@ -318,6 +360,7 @@ class Seedance20VideoGeneration(SeedanceProxyNode):
                 allowed_modes={ParameterMode.INPUT},
                 ui_options={"display_name": "Reference Video 3"},
                 hide_property=True,
+                pre_run_validators=[REFERENCE_VIDEO_LIMITS],
                 hide=True,
             ),
             disclaimer_message="The Seedance 2.0 service utilizes this URL to access the reference video.",
@@ -334,6 +377,7 @@ class Seedance20VideoGeneration(SeedanceProxyNode):
                 allowed_modes={ParameterMode.INPUT},
                 ui_options={"display_name": "Reference Audio", "expander": True, "hide_property": True},
                 max_items=3,
+                pre_run_validators=[REFERENCE_AUDIO_LIMITS],
             )
         )
 
@@ -562,75 +606,19 @@ class Seedance20VideoGeneration(SeedanceProxyNode):
         except ValueError as e:
             exceptions.append(e)
 
-        try:
-            exceptions.extend(self._media_errors(params))
-        except ValueError as e:
-            exceptions.append(e)
-
-        return exceptions if exceptions else None
-
-    def _media_errors(self, params: dict[str, Any]) -> list[NodeError]:
-        """One error per BytePlus limit the media the selected input mode sends breaks, read without
-        any network call.
-
-        First/Last Frame mode sends only the frames, Multimodal References mode only the references,
-        and Text Only nothing; media the mode doesn't send is reported by `_validate_parameters`.
-        """
         input_mode = params["input_mode"]
-        match input_mode:
-            case mode if mode == INPUT_MODE_TEXT_ONLY:
-                return []
-            case mode if mode == INPUT_MODE_FIRST_LAST_FRAME:
-                return self._frame_errors(params)
-            case mode if mode == INPUT_MODE_MULTIMODAL_REFERENCES:
-                return self._reference_errors(params)
-            case _:
-                msg = (
+        if input_mode not in INPUT_MODES:
+            exceptions.append(
+                ValueError(
                     f"'Input Mode' is {input_mode!r}, which isn't one of {INPUT_MODE_TEXT_ONLY}, "
                     f"{INPUT_MODE_FIRST_LAST_FRAME} or {INPUT_MODE_MULTIMODAL_REFERENCES}. Choose one of them."
                 )
-                raise ValueError(msg)
-
-    def _frame_errors(self, params: dict[str, Any]) -> list[NodeError]:
-        """One error per BytePlus limit the First Frame or Last Frame breaks."""
-        errors: list[NodeError] = []
-        for parameter, name in (("first_frame", "First Frame"), ("last_frame", "Last Frame")):
-            if params[parameter] is not None:
-                errors += seedance_image_errors(
-                    params[parameter], subject=input_subject(name, noun="image"), docs_url=INPUT_LIMITS_URL
-                )
-        return errors
-
-    def _reference_errors(self, params: dict[str, Any]) -> list[NodeError]:
-        """One error per BytePlus limit the reference images, videos or audio break."""
-        errors: list[NodeError] = []
-        for position, image in enumerate(params["reference_images"], start=1):
-            errors += seedance_image_errors(
-                image,
-                subject=input_subject("Reference Images", noun="image", position=position),
-                docs_url=INPUT_LIMITS_URL,
             )
-        connected = {parameter: name for parameter, name in REFERENCE_VIDEO_PARAMETERS.items() if params[parameter]}
-        errors += seedance_reference_video_errors(
-            [(input_subject(name, noun="video"), params[parameter]) for parameter, name in connected.items()],
-            min_seconds=MIN_REFERENCE_VIDEO_SECONDS,
-            max_seconds=MAX_REFERENCE_VIDEO_SECONDS,
-            max_total_seconds=MAX_TOTAL_REFERENCE_VIDEO_SECONDS,
-            parameters=_join_and([f"'{name}'" for name in connected.values()]),
-            docs_url=INPUT_LIMITS_URL,
-        )
-        errors += seedance_reference_audio_errors(
-            [
-                (input_subject("Reference Audio", noun="audio clip", position=position), audio)
-                for position, audio in enumerate(params["reference_audio"], start=1)
-            ],
-            min_seconds=MIN_REFERENCE_AUDIO_SECONDS,
-            max_seconds=MAX_REFERENCE_AUDIO_SECONDS,
-            max_total_seconds=MAX_TOTAL_REFERENCE_AUDIO_SECONDS,
-            parameters="'Reference Audio'",
-            docs_url=INPUT_LIMITS_URL,
-        )
-        return errors
+
+        return exceptions if exceptions else None
+
+    def input_limits_url(self) -> str | None:
+        return INPUT_LIMITS_URL
 
     def _get_parameters(self) -> dict[str, Any]:
         model_id = self.get_parameter_value("model_id") or MODEL_NAME_SEEDANCE_2_0
