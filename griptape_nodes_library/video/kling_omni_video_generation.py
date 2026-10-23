@@ -7,12 +7,7 @@ from typing import Any
 
 from griptape.artifacts import ImageArtifact, ImageUrlArtifact
 from griptape.artifacts.video_url_artifact import VideoUrlArtifact
-from griptape_nodes.exe_types.core_types import NodeError, Parameter, ParameterGroup, ParameterList, ParameterMode
-from griptape_nodes.exe_types.input_checks import (
-    image_errors,
-    input_subject,
-    video_errors,
-)
+from griptape_nodes.exe_types.core_types import Parameter, ParameterGroup, ParameterList, ParameterMode
 from griptape_nodes.exe_types.param_components.artifact_url.public_artifact_url_parameter import (
     PublicArtifactUrlParameter,
 )
@@ -24,6 +19,15 @@ from griptape_nodes.exe_types.param_types.parameter_image import ParameterImage
 from griptape_nodes.exe_types.param_types.parameter_int import ParameterInt
 from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
 from griptape_nodes.exe_types.param_types.parameter_video import ParameterVideo
+from griptape_nodes.exe_types.validators.media import (
+    AllowedFormats,
+    AspectRatioRange,
+    Duration,
+    FrameRate,
+    MaxFileSize,
+    PixelArea,
+    SideRange,
+)
 from griptape_nodes.files.file import File, FileLoadError
 from griptape_nodes.traits.options import Options
 from griptape_nodes.utils.artifact_normalization import normalize_artifact_list
@@ -50,13 +54,13 @@ INPUT_LIMITS_URLS = {
     "kling-v3-omni": "https://kling.ai/document-api/api/video/3-0-omni/video-omni/legacy",
     "kling-video-o1": "https://kling.ai/document-api/api/video/o1/video-omni/legacy",
 }
-SUPPORTED_IMAGE_MIME_TYPES = ("image/jpeg", "image/png")
-MAX_IMAGE_BYTES = 10 * 1024 * 1024
-MIN_IMAGE_SIDE = 300
-MAX_VIDEO_BYTES = 200 * 1024 * 1024
-SUPPORTED_VIDEO_MIME_TYPES = ("video/mp4", "video/quicktime")
-WIDEST_ASPECT_RATIO = "2.5:1"
-TALLEST_ASPECT_RATIO = "1:2.5"
+ASPECT_RATIO_RANGE = AspectRatioRange("1:2.5", "2.5:1")
+IMAGE_LIMITS = (
+    AllowedFormats("image/jpeg", "image/png"),
+    MaxFileSize(10 * 1024 * 1024),
+    SideRange(min=300),
+    ASPECT_RATIO_RANGE,
+)
 # Reference video duration and frame size: the wider bounds of two Kling pages, on purpose.
 #
 # Both pages document this same endpoint (POST /v1/videos/omni-video) and list both models it
@@ -79,14 +83,16 @@ TALLEST_ASPECT_RATIO = "1:2.5"
 # a different endpoint, so they aren't used:
 #   https://kling.ai/document-api/api/video/o1/video-omni
 #   https://kling.ai/document-api/api/video/3-0-omni/video-omni
-MIN_VIDEO_SECONDS = 3
-MAX_VIDEO_SECONDS = 15.5
-MIN_VIDEO_SIDE = 700
-MAX_VIDEO_SIDE = 4553
-MAX_VIDEO_MEGAPIXELS = 8.2944
-# "Frame rate: 24-60fps (output will be 24fps)", the same on both pages above.
-MIN_VIDEO_FPS = 24
-MAX_VIDEO_FPS = 60
+REFERENCE_VIDEO_LIMITS = (
+    MaxFileSize(200 * 1024 * 1024),
+    AllowedFormats("video/mp4", "video/quicktime"),
+    Duration(min=3, max=15.5),
+    SideRange(min=700, max=4553),
+    PixelArea(max_megapixels=8.2944),
+    ASPECT_RATIO_RANGE,
+    # "Frame rate: 24-60fps (output will be 24fps)", the same on both pages above.
+    FrameRate(min=24, max=60),
+)
 MAX_MULTI_PROMPT_COUNT = 6
 MODE_STD = "std"
 MODE_PRO = "pro"
@@ -233,6 +239,7 @@ class KlingOmniVideoGeneration(GriptapeProxyNode):
                 allowed_modes={ParameterMode.INPUT},
                 hide_property=True,
                 ui_options={"display_name": "first frame"},
+                pre_run_validators=IMAGE_LIMITS,
             )
         )
         self.add_parameter(
@@ -242,6 +249,7 @@ class KlingOmniVideoGeneration(GriptapeProxyNode):
                 allowed_modes={ParameterMode.INPUT},
                 hide_property=True,
                 ui_options={"display_name": "end frame"},
+                pre_run_validators=IMAGE_LIMITS,
             )
         )
         self.add_parameter(
@@ -259,6 +267,7 @@ class KlingOmniVideoGeneration(GriptapeProxyNode):
                 tooltip="Reference images for generation. These appear first in the template (<<<image_1>>>, <<<image_2>>>, etc.)",
                 allowed_modes={ParameterMode.INPUT},
                 ui_options={"expander": True, "display_name": "reference images", "hide_property": True},
+                pre_run_validators=IMAGE_LIMITS,
             )
         )
 
@@ -283,6 +292,7 @@ class KlingOmniVideoGeneration(GriptapeProxyNode):
                 allowed_modes={ParameterMode.INPUT},
                 ui_options={"placeholder_text": "https://example.com/video.mp4"},
                 hide_property=True,
+                pre_run_validators=REFERENCE_VIDEO_LIMITS,
             ),
             disclaimer_message="The Kling Omni service utilizes this URL to access the video for generation.",
         )
@@ -808,55 +818,9 @@ class KlingOmniVideoGeneration(GriptapeProxyNode):
                     )
                 )
 
-        exceptions.extend(self._media_errors())
-
         return exceptions if exceptions else None
 
-    def _media_errors(self) -> list[NodeError]:
-        """One error per Kling media limit an input breaks, read without any network call."""
-        docs_url = self._input_limits_url()
-        images = [
-            (input_subject(name, noun="image"), self.get_parameter_value(parameter))
-            for parameter, name in (("first_frame_image", "first frame"), ("end_frame_image", "end frame"))
-        ]
-        images += [
-            (input_subject("reference images", noun="image", position=position), image)
-            for position, image in enumerate(self.get_parameter_list_value("reference_images") or [], start=1)
-        ]
-        errors: list[NodeError] = []
-        for subject, image in images:
-            if image:
-                errors += image_errors(
-                    image,
-                    subject=subject,
-                    allowed_mime_types=SUPPORTED_IMAGE_MIME_TYPES,
-                    maximum_bytes=MAX_IMAGE_BYTES,
-                    min_side=MIN_IMAGE_SIDE,
-                    widest=WIDEST_ASPECT_RATIO,
-                    tallest=TALLEST_ASPECT_RATIO,
-                    docs_url=docs_url,
-                )
-        video = self.get_parameter_value("reference_video")
-        if video:
-            errors += video_errors(
-                video,
-                subject=input_subject("reference_video", noun="video"),
-                allowed_mime_types=SUPPORTED_VIDEO_MIME_TYPES,
-                maximum_bytes=MAX_VIDEO_BYTES,
-                min_seconds=MIN_VIDEO_SECONDS,
-                max_seconds=MAX_VIDEO_SECONDS,
-                min_side=MIN_VIDEO_SIDE,
-                max_side=MAX_VIDEO_SIDE,
-                max_megapixels=MAX_VIDEO_MEGAPIXELS,
-                widest=WIDEST_ASPECT_RATIO,
-                tallest=TALLEST_ASPECT_RATIO,
-                min_fps=MIN_VIDEO_FPS,
-                max_fps=MAX_VIDEO_FPS,
-                docs_url=docs_url,
-            )
-        return errors
-
-    def _input_limits_url(self) -> str:
+    def input_limits_url(self) -> str | None:
         """Kling's limits page for the selected model; the 3.0 Omni page when the selection is unknown."""
         return INPUT_LIMITS_URLS.get(self._get_selected_model_id(), INPUT_LIMITS_URLS["kling-v3-omni"])
 

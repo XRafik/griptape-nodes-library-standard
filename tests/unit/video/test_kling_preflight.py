@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
 from griptape_nodes.exe_types import input_checks
 from griptape_nodes.exe_types.core_types import NodeError
-from griptape_nodes.exe_types.input_checks import ImageInfo, VideoProbe
+from griptape_nodes.exe_types.input_checks import ImageInfo, VideoProbe, input_check_readings
+from griptape_nodes.exe_types.pre_run_validation import run_pre_run_validators
 from PIL import Image
 
 from griptape_nodes_library.video.kling_image_to_video_generation import KlingImageToVideoGeneration
@@ -24,8 +24,25 @@ def _image(tmp_path: Path, size: tuple[int, int] = (1280, 720), image_format: st
     return str(path)
 
 
+def _errors(node: Any) -> list[NodeError]:
+    """What the engine reports at the node's turn: its pre-run validators', then its own checks'."""
+    with input_check_readings():
+        exceptions = [*run_pre_run_validators(node), *(node.validate_before_node_run() or [])]
+    return [e for e in exceptions if isinstance(e, NodeError)]
+
+
 def _messages(node: Any) -> list[str]:
-    return [str(e) for e in node.validate_before_node_run() or [] if isinstance(e, NodeError)]
+    return [str(e) for e in _errors(node)]
+
+
+def _oversized(monkeypatch: pytest.MonkeyPatch, suffix: str) -> None:
+    """Make local files ending in `suffix` read as 1 GB, over each Kling size limit, without writing one."""
+    read_size = input_checks._read_size_bytes
+    monkeypatch.setattr(
+        input_checks,
+        "_read_size_bytes",
+        lambda location: 1024**3 if location.endswith(suffix) else read_size(location),
+    )
 
 
 @pytest.fixture
@@ -40,7 +57,7 @@ def video(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         "fps": 30.0,
         "mime_type": "video/mp4",
     }
-    # video_errors probes through the engine's own reader, so patch it there.
+    # The validators probe through the engine's own reader, so patch it there.
     monkeypatch.setattr(
         input_checks,
         "local_video_probe",
@@ -98,7 +115,7 @@ class TestImageToVideo:
     def test_rejects_an_oversized_start_frame(
         self, node: KlingImageToVideoGeneration, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(sys.modules[KlingImageToVideoGeneration.__module__], "MAX_IMAGE_BYTES", 10)
+        _oversized(monkeypatch, ".png")
         node.set_parameter_value("image", _image(tmp_path))
         messages = _messages(node)
         assert len(messages) == 1
@@ -123,7 +140,7 @@ class TestImageToVideo:
 
     def test_errors_link_klings_page(self, node: KlingImageToVideoGeneration, tmp_path: Path) -> None:
         node.set_parameter_value("image", _image(tmp_path, image_format="GIF"))
-        errors = [e for e in node.validate_before_node_run() or [] if isinstance(e, NodeError)]
+        errors = _errors(node)
         assert errors[0].links
         assert errors[0].links[0].url == "https://kling.ai/document-api/api/video/image-to-video"
 
@@ -187,7 +204,7 @@ class TestOmni:
     ) -> None:
         node.set_parameter_value("model_name", model)
         node.set_parameter_value("first_frame_image", _image(tmp_path, (200, 400)))
-        errors = [e for e in node.validate_before_node_run() or [] if isinstance(e, NodeError)]
+        errors = _errors(node)
         assert [link.url for error in errors for link in error.links] == [url]
 
     def test_names_the_position_of_an_invalid_reference_image(
@@ -271,14 +288,14 @@ class TestOmni:
         video["info"] = info
         node.set_parameter_value("reference_video", video["path"])
         messages = _messages(node)
-        assert len(messages) == 1
+        # The side limit is checked first; a frame over 4553 px is usually over the area limit too.
         assert messages[0].startswith("The video in 'reference_video' is ")
         assert expected in messages[0]
 
     def test_rejects_an_oversized_reference_image(
         self, node: KlingOmniVideoGeneration, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(sys.modules[KlingOmniVideoGeneration.__module__], "MAX_IMAGE_BYTES", 10)
+        _oversized(monkeypatch, ".png")
         node.set_parameter_value("reference_images", [_image(tmp_path)])
         messages = _messages(node)
         assert len(messages) == 1
@@ -311,7 +328,7 @@ class TestOmni:
     def test_rejects_an_oversized_reference_video(
         self, node: KlingOmniVideoGeneration, video: dict[str, Any], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(sys.modules[KlingOmniVideoGeneration.__module__], "MAX_VIDEO_BYTES", 1)
+        _oversized(monkeypatch, ".mp4")
         node.set_parameter_value("reference_video", video["path"])
         messages = _messages(node)
         assert len(messages) == 1
@@ -399,7 +416,7 @@ class TestMotionControl:
     def test_rejects_an_oversized_reference_image(
         self, node: KlingMotionControl, tmp_path: Path, video: dict[str, Any], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(sys.modules[KlingMotionControl.__module__], "MAX_IMAGE_BYTES", 10)
+        _oversized(monkeypatch, ".png")
         node.set_parameter_value("reference_image", _image(tmp_path))
         node.set_parameter_value("reference_video", video["path"])
         messages = _messages(node)
@@ -410,18 +427,18 @@ class TestMotionControl:
     def test_rejects_a_reference_image_over_the_largest_side(
         self, node: KlingMotionControl, tmp_path: Path, video: dict[str, Any], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # A real 65537 px image is too large to build in a test; lower the limit instead.
-        monkeypatch.setattr(sys.modules[KlingMotionControl.__module__], "MAX_IMAGE_SIDE", 1000)
+        # A real 65537 px image is too large to build in a test; have the reader report one instead.
+        monkeypatch.setattr(input_checks, "_read_image_info", lambda _location: ImageInfo(65537, 30000, "image/png"))
         node.set_parameter_value("reference_image", _image(tmp_path, (1200, 800)))
         node.set_parameter_value("reference_video", video["path"])
         assert _messages(node) == [
-            "The image in 'reference_image' is 1200x800 and each side must be at most 1000 pixels. Resize it smaller."
+            "The image in 'reference_image' is 65537x30000 and each side must be at most 65536 pixels. Resize it smaller."
         ]
 
     def test_rejects_an_oversized_reference_video(
         self, node: KlingMotionControl, tmp_path: Path, video: dict[str, Any], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(sys.modules[KlingMotionControl.__module__], "MAX_VIDEO_BYTES", 1)
+        _oversized(monkeypatch, ".mp4")
         node.set_parameter_value("reference_image", _image(tmp_path))
         node.set_parameter_value("reference_video", video["path"])
         messages = _messages(node)

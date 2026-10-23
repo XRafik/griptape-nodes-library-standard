@@ -9,11 +9,7 @@ from typing import Any, ClassVar
 
 from griptape.artifacts import ImageArtifact, ImageUrlArtifact
 from griptape.artifacts.video_url_artifact import VideoUrlArtifact
-from griptape_nodes.exe_types.core_types import NodeError, Parameter, ParameterGroup, ParameterMode
-from griptape_nodes.exe_types.input_checks import (
-    image_errors,
-    input_subject,
-)
+from griptape_nodes.exe_types.core_types import Parameter, ParameterGroup, ParameterMode
 from griptape_nodes.exe_types.param_components.model_access_component import ModelAccessComponent
 from griptape_nodes.exe_types.param_components.project_file_parameter import ProjectFileParameter
 from griptape_nodes.exe_types.param_types.parameter_bool import ParameterBool
@@ -23,6 +19,7 @@ from griptape_nodes.exe_types.param_types.parameter_image import ParameterImage
 from griptape_nodes.exe_types.param_types.parameter_int import ParameterInt
 from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
 from griptape_nodes.exe_types.param_types.parameter_video import ParameterVideo
+from griptape_nodes.exe_types.validators.media import AllowedFormats, AspectRatioRange, MaxFileSize, SideRange
 from griptape_nodes.files.file import File, FileLoadError
 from griptape_nodes.traits.options import Options
 from griptape_nodes.traits.widget import Widget
@@ -44,11 +41,12 @@ MAX_PROMPT_LENGTH = 2500
 # stated for `image` only.
 # https://kling.ai/document-api/api/video/image-to-video
 INPUT_LIMITS_URL = "https://kling.ai/document-api/api/video/image-to-video"
-SUPPORTED_IMAGE_MIME_TYPES = ("image/jpeg", "image/png")
-MAX_IMAGE_BYTES = 10 * 1024 * 1024
-MIN_IMAGE_SIDE = 300
-WIDEST_IMAGE_ASPECT_RATIO = "2.5:1"
-TALLEST_IMAGE_ASPECT_RATIO = "1:2.5"
+END_FRAME_LIMITS = (
+    AllowedFormats("image/jpeg", "image/png"),
+    MaxFileSize(10 * 1024 * 1024),
+    SideRange(min=300),
+)
+START_FRAME_LIMITS = (*END_FRAME_LIMITS, AspectRatioRange("1:2.5", "2.5:1"))
 DEFAULT_DURATION_5S = 5
 MAX_MULTI_PROMPT_COUNT = 6
 V3_MODEL_ID = "kling-v3"
@@ -281,6 +279,7 @@ class KlingImageToVideoGeneration(GriptapeProxyNode):
                 allowed_modes={ParameterMode.INPUT},
                 hide_property=True,
                 ui_options={"display_name": "Start Frame"},
+                pre_run_validators=START_FRAME_LIMITS,
             )
         )
         self.add_parameter(
@@ -291,6 +290,7 @@ class KlingImageToVideoGeneration(GriptapeProxyNode):
                 allowed_modes={ParameterMode.INPUT},
                 hide_property=True,
                 ui_options={"display_name": "End Frame"},
+                pre_run_validators=END_FRAME_LIMITS,
             )
         )
 
@@ -1006,25 +1006,7 @@ class KlingImageToVideoGeneration(GriptapeProxyNode):
             except json.JSONDecodeError as e:
                 exceptions.append(ValueError(f"'dynamic_masks' is not valid JSON: {e}"))
 
-        if image:
-            exceptions.extend(self._frame_image_errors(image, "Start Frame", check_aspect_ratio=True))
-        if image_tail:
-            exceptions.extend(self._frame_image_errors(image_tail, "End Frame", check_aspect_ratio=False))
-
         return exceptions if exceptions else None
 
-    def _frame_image_errors(self, image: Any, parameter: str, *, check_aspect_ratio: bool) -> list[NodeError]:
-        """One error per Kling image limit a frame breaks, read without any network call.
-
-        Kling states the aspect-ratio limit for the start frame only, so the end frame skips it.
-        """
-        return image_errors(
-            image,
-            subject=input_subject(parameter, noun="image"),
-            allowed_mime_types=SUPPORTED_IMAGE_MIME_TYPES,
-            maximum_bytes=MAX_IMAGE_BYTES,
-            min_side=MIN_IMAGE_SIDE,
-            widest=WIDEST_IMAGE_ASPECT_RATIO if check_aspect_ratio else None,
-            tallest=TALLEST_IMAGE_ASPECT_RATIO if check_aspect_ratio else None,
-            docs_url=INPUT_LIMITS_URL,
-        )
+    def input_limits_url(self) -> str | None:
+        return INPUT_LIMITS_URL
