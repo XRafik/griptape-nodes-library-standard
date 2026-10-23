@@ -424,43 +424,51 @@ BaseProxyNode automatically adds the model field to the request.
 
 ### Validation Patterns
 
-Use `validate_before_node_run()` for pre-execution validation. Return one exception per problem, each naming the parameter as the UI shows it and saying how to fix it, with no node name (the editor shows which node failed). Check media inputs against the provider's documented limits with the engine's `griptape_nodes.exe_types.input_checks`:
+Declare media inputs' provider limits on their parameters with `pre_run_validators=`, using the engine's validators in `griptape_nodes.exe_types.validators`. The engine checks them before the node runs, reads each input once, and names each input by its display name in the error. Override `input_limits_url()` to return the docs page the errors link to:
 
 ```python
-from griptape_nodes.exe_types.input_checks import check_count, image_errors, input_subject
+from griptape_nodes.exe_types.core_types import ParameterList
+from griptape_nodes.exe_types.validators.common import MaxCount
+from griptape_nodes.exe_types.validators.media import AllowedFormats, MaxFileSize
 
 # "Up to 10 images, JPEG or PNG, each up to 10 MB" - https://example.com/limits
 LIMITS_URL = "https://example.com/limits"
-MAX_IMAGES = 10
-SUPPORTED_IMAGE_MIME_TYPES = ("image/jpeg", "image/png")
-MAX_IMAGE_BYTES = 10 * 1024 * 1024
+IMAGE_LIMITS = (
+    MaxCount(10, noun="images"),
+    AllowedFormats("image/jpeg", "image/png"),
+    MaxFileSize(10 * 1024 * 1024),
+)
+
+# In __init__:
+self.add_parameter(
+    ParameterList(
+        name="images",
+        input_types=["ImageArtifact", "ImageUrlArtifact"],
+        type="ImageUrlArtifact",
+        pre_run_validators=IMAGE_LIMITS,
+    )
+)
 
 
+def input_limits_url(self) -> str | None:
+    return LIMITS_URL
+```
+
+Limits that change with the selected model go in `ByParameter("model", {...}, default=[...])`. A rule across several inputs, such as a total length, is a `NodeValidator` listed in the node's `node_validators`.
+
+Use `validate_before_node_run()` for the checks that aren't media limits. Return one exception per problem, each naming the parameter as the UI shows it and saying how to fix it, with no node name (the editor shows which node failed):
+
+```python
 def validate_before_node_run(self) -> list[Exception] | None:
     exceptions = super().validate_before_node_run() or []
 
     if not self.get_parameter_value("prompt"):
         exceptions.append(ValueError("A prompt is required. Enter one in 'prompt'."))
 
-    images = self.get_parameter_list_value("images") or []
-    too_many = check_count(len(images), maximum=MAX_IMAGES, parameter="images", noun="images", docs_url=LIMITS_URL)
-    if too_many:
-        exceptions.append(too_many)
-    for position, image in enumerate(images, start=1):
-        exceptions.extend(
-            image_errors(
-                image,
-                subject=input_subject("images", noun="image", position=position),
-                allowed_mime_types=SUPPORTED_IMAGE_MIME_TYPES,
-                maximum_bytes=MAX_IMAGE_BYTES,
-                docs_url=LIMITS_URL,
-            )
-        )
-
     return exceptions or None
 ```
 
-This fails the node before anything is uploaded or sent, so a bad input costs no API call. See CLAUDE.md, "Validate inputs before the run", and the `node-errors` skill for message wording.
+Both fail the node before anything is uploaded or sent, so a bad input costs no API call. See CLAUDE.md, "Validate inputs before the run", and the `node-errors` skill for message wording.
 
 ## Real Error Response Examples
 

@@ -125,27 +125,34 @@ return
 
 ## Media inputs
 
-Check an image, video or audio input against the provider's documented limits in
-`validate_before_node_run`, with the engine's `griptape_nodes.exe_types.input_checks`. Its errors
-already follow this skill: they name the input, the value and the limit, say how to fix it, and
-link the docs URL you pass.
+Declare an image, video or audio input's provider limits on its parameter with
+`pre_run_validators=`, using the engine's `griptape_nodes.exe_types.validators`. The engine checks
+them before the node runs, and their errors already follow this skill: they name the input by its
+display name, give the value and the limit, say how to fix it, and link the page
+`input_limits_url()` returns.
 
 ```python
-exceptions.extend(
-    image_errors(
-        image,
-        subject=input_subject("Start Frame", noun="image"),
-        allowed_mime_types=("image/jpeg", "image/png"),
-        maximum_bytes=10 * 1024 * 1024,  # "Up to 10 MB" - https://example.com/limits
-        min_side=300,
-        docs_url=LIMITS_URL,
-    )
+# "JPEG or PNG, up to 10 MB, each side at least 300 px" - https://example.com/limits
+START_FRAME_LIMITS = (
+    AllowedFormats("image/jpeg", "image/png"),
+    MaxFileSize(10 * 1024 * 1024),
+    SideRange(min=300),
 )
+
+self.add_parameter(
+    ParameterImage(name="image", display_name="Start Frame", pre_run_validators=START_FRAME_LIMITS)
+)
+
+
+def input_limits_url(self) -> str | None:
+    return LIMITS_URL
 ```
 
-Don't write your own media readers or limit checks. If two or more nodes from different providers
-need a check the engine doesn't have, add it to the engine. See CLAUDE.md, "Validate inputs before
-the run", and the engine's [Checking inputs before a run](https://docs.griptapenodes.com/en/stable/development/custom_nodes/error_handling/#checking-inputs-before-a-run).
+Use `ByParameter` for limits that depend on the selected model, and a `NodeValidator` in the
+node's `node_validators` for a rule across several inputs. Keep `validate_before_node_run` for
+checks that aren't media limits. Don't write your own media readers or limit checks. If two or
+more nodes from different providers need a validator the engine doesn't have, add it to the
+engine. See CLAUDE.md, "Validate inputs before the run", and the engine's [Checking inputs before a run](https://docs.griptapenodes.com/en/stable/development/custom_nodes/error_handling/#checking-inputs-before-a-run).
 
 ## Proxy nodes
 

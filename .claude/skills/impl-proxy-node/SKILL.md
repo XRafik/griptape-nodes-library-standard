@@ -69,7 +69,7 @@ Study the patterns for:
 
 3. **If the API has a size limit on data URIs:** Add compression before encoding using `shrink_image_to_size` from `griptape_nodes_library.utils.image_utils`. Calculate the max raw bytes based on the API's character limit (base64 encoding expands ~33%, plus the `data:image/...;base64,` prefix).
 
-4. **Check each media input against the provider's limits** in `validate_before_node_run`, using the engine's `image_errors`, `video_errors` or `audio_errors` from `griptape_nodes.exe_types.input_checks`. Put each limit in a constant with a comment quoting the provider's docs and its URL. See CLAUDE.md, "Validate inputs before the run", and the `node-errors` skill.
+4. **Declare each media input's provider limits** with `pre_run_validators=` on its parameter, using the engine's validators from `griptape_nodes.exe_types.validators.media` (and `MaxCount` or `ByParameter` from `validators.common`). Quote the provider's docs and URL in a comment by each limit, and override `input_limits_url()` to return the docs page. Rules across several inputs go in the node's `node_validators`. See CLAUDE.md, "Validate inputs before the run", and the `node-errors` skill.
 
 ## 5. Create the Node File
 
@@ -386,7 +386,7 @@ Re-read the spec file and use `/agent-browser` to open the API documentation pag
 
 **Errors:**
 - [ ] Validation messages name the parameter as the UI shows it, one exception per problem, with no node name
-- [ ] Each media input is checked against the provider's documented limits with the engine's `input_checks`, and each limit's constant quotes the provider's docs
+- [ ] Each media input declares the provider's documented limits with `pre_run_validators=`, each limit quotes the provider's docs, and `input_limits_url()` returns the docs page
 - [ ] `_extract_error_message` (if overridden) returns the bare reason or `""`
 - [ ] Every `_parse_result` failure sets the status to failed and returns, or raises
 
