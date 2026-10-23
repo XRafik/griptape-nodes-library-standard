@@ -120,19 +120,6 @@ class ResizeMode(StrEnum):
     PERCENTAGE = "percentage"
 
 
-class _AlwaysHiddenParameterFloat(ParameterFloat):
-    """A float parameter that stays hidden whatever ui_options are written to it.
-
-    Saved workflows replay each parameter's ui_options on load, with `hide: False` for
-    any control that was visible when saved, and no node hook runs afterwards to hide
-    it again.
-    """
-
-    @ParameterFloat.ui_options.setter
-    def ui_options(self, value: dict) -> None:
-        ParameterFloat.ui_options.fset(self, {**value, "hide": True})  # pyright: ignore[reportOptionalCall]
-
-
 class TopazVideoUpscale(GriptapeProxyNode):
     """Upscale a video with Topaz Starlight Precise or Astra 2 via the Griptape Cloud model proxy.
 
@@ -205,18 +192,6 @@ class TopazVideoUpscale(GriptapeProxyNode):
         )
         sharp_param.add_trait(Slider(min_val=0.0, max_val=1.0))
         self.add_parameter(sharp_param)
-
-        # Ignored. Kept so saved workflows that set or connect `realism` load: Topaz
-        # dropped the control from Astra 2, so it is never shown and never sent.
-        self.add_parameter(
-            _AlwaysHiddenParameterFloat(
-                name="realism",
-                default_value=0.5,
-                tooltip="Ignored. Kept so saved workflows load.",
-                allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
-                hide=True,
-            )
-        )
 
         # Topaz downloads the source itself rather than receiving it in the request
         # body -- a video is far too large to base64 into JSON. This uploads the
