@@ -5,7 +5,6 @@ from typing import Any, ClassVar
 
 from griptape.artifacts.video_url_artifact import VideoUrlArtifact
 from griptape_nodes.exe_types.core_types import ParameterMode
-from griptape_nodes.exe_types.input_checks import input_subject, video_errors
 from griptape_nodes.exe_types.param_components.artifact_url.public_artifact_url_parameter import (
     PublicArtifactUrlParameter,
 )
@@ -14,6 +13,7 @@ from griptape_nodes.exe_types.param_components.project_file_parameter import Pro
 from griptape_nodes.exe_types.param_types.parameter_dict import ParameterDict
 from griptape_nodes.exe_types.param_types.parameter_string import ParameterString
 from griptape_nodes.exe_types.param_types.parameter_video import ParameterVideo
+from griptape_nodes.exe_types.validators.media import AllowedFormats, Duration
 from griptape_nodes.files.file import File, FileLoadError
 
 from griptape_nodes_library.media import coerce_media_url_or_data_uri, is_publicly_reachable_url
@@ -28,7 +28,10 @@ __all__ = ["GrokVideoEdit"]
 # then fails the job with no reason, so they are checked before the node runs.
 XAI_VIDEO_EDIT_DOCS_URL = "https://docs.x.ai/developers/model-capabilities/video/editing"
 MAX_INPUT_DURATION_SECONDS = 8.7
-SUPPORTED_MIME_TYPE = "video/mp4"
+# The format and duration are read from the file itself, so a MOV renamed to .mp4 is still refused.
+# Only a file on this machine is read: a remote URL or a data URI goes unchecked and xAI enforces
+# the limits.
+VIDEO_LIMITS = (AllowedFormats("video/mp4"), Duration(max=MAX_INPUT_DURATION_SECONDS))
 
 
 class GrokVideoEdit(GriptapeProxyNode):
@@ -93,6 +96,7 @@ class GrokVideoEdit(GriptapeProxyNode):
             allowed_modes={ParameterMode.INPUT},
             hide_property=True,
             ui_options={"display_name": "Video"},
+            pre_run_validators=VIDEO_LIMITS,
         )
         video_param.set_badge(
             variant="info",
@@ -150,23 +154,6 @@ class GrokVideoEdit(GriptapeProxyNode):
         if hasattr(value, "value"):
             return bool(value.value)
         return bool(value)
-
-    def _find_input_limit_errors(self, video_input: Any) -> list[Exception]:
-        """Return an error per xAI input limit the video breaks, or an empty list.
-
-        The format and duration are read from the file itself, so a MOV renamed to .mp4 is still
-        refused. Only a file on this machine is read: a remote URL or a data URI goes unchecked and
-        xAI enforces the limits.
-        """
-        return list(
-            video_errors(
-                video_input,
-                subject=input_subject("Video", noun="video"),
-                allowed_mime_types=(SUPPORTED_MIME_TYPE,),
-                max_seconds=MAX_INPUT_DURATION_SECONDS,
-                docs_url=XAI_VIDEO_EDIT_DOCS_URL,
-            )
-        )
 
     async def aprocess(self) -> None:
         try:
@@ -242,10 +229,11 @@ class GrokVideoEdit(GriptapeProxyNode):
         video_value = self.get_parameter_value("video")
         if not self._has_media_value(video_value):
             exceptions.append(ValueError("A video is required for editing. Connect one to 'Video'."))
-        else:
-            exceptions.extend(self._find_input_limit_errors(video_value))
 
         return exceptions if exceptions else None
+
+    def input_limits_url(self) -> str | None:
+        return XAI_VIDEO_EDIT_DOCS_URL
 
     async def _build_payload(self) -> dict[str, Any]:
         prompt = (self.get_parameter_value("prompt") or "").strip()

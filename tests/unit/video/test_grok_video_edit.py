@@ -1,18 +1,20 @@
 from __future__ import annotations
 
+import subprocess
 from typing import Any
 
 import pytest
 from griptape.artifacts.video_url_artifact import VideoUrlArtifact
 from griptape_nodes.exe_types import input_checks
 from griptape_nodes.exe_types.core_types import NodeError
-from griptape_nodes.exe_types.input_checks import VideoProbe
+from griptape_nodes.exe_types.input_checks import VideoProbe, input_check_readings
 from griptape_nodes.exe_types.param_components.artifact_url import (
     public_artifact_url_parameter as public_artifact_url_parameter_module,
 )
 from griptape_nodes.exe_types.param_components.artifact_url.public_artifact_url_parameter import (
     PublicArtifactUrlParameter,
 )
+from griptape_nodes.exe_types.pre_run_validation import run_pre_run_validators
 from griptape_nodes.files import file as file_module
 from griptape_nodes.files.file import FileLoadError
 from griptape_nodes.retained_mode.events.os_events import FileIOFailureReason
@@ -88,7 +90,7 @@ class TestPrepareVideoUrlFallback:
 
 def _stub_probe(monkeypatch: pytest.MonkeyPatch, duration: float | None, mime_type: str | None) -> None:
     probe = VideoProbe(info=None, seconds=duration, mime_type=mime_type)
-    # video_errors probes through the engine's own reader, so patch it there.
+    # The validators probe through the engine's own reader, so patch it there.
     monkeypatch.setattr(input_checks, "local_video_probe", lambda _value: probe)
 
 
@@ -103,8 +105,14 @@ def _validated_node(
     return node
 
 
+def _errors(node: GrokVideoEdit) -> list[Exception]:
+    """What the engine reports at the node's turn: its pre-run validators', then its own checks'."""
+    with input_check_readings():
+        return [*run_pre_run_validators(node), *(node.validate_before_node_run() or [])]
+
+
 def _messages(node: GrokVideoEdit) -> list[str]:
-    return [str(error) for error in node.validate_before_node_run() or []]
+    return [str(error) for error in _errors(node)]
 
 
 class TestInputLimits:
@@ -131,7 +139,7 @@ class TestInputLimits:
         self, monkeypatch: pytest.MonkeyPatch, video_input: str
     ) -> None:
         # The real reader: it reads only files on this machine, so it returns nothing for these.
-        monkeypatch.setattr(input_checks.subprocess, "run", lambda *_a, **_k: pytest.fail("ffprobe not run"))
+        monkeypatch.setattr(subprocess, "run", lambda *_a, **_k: pytest.fail("ffprobe not run"))
         node = GrokVideoEdit(name="GrokVideoEdit")
         node.set_parameter_value("prompt", "make it snow")
         node.set_parameter_value("video", video_input)
@@ -143,7 +151,7 @@ class TestInputLimits:
         ]
 
     def test_limit_errors_link_xai_docs(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        errors = _validated_node(monkeypatch, "{inputs}/clip.mp4", duration=12.0).validate_before_node_run() or []
+        errors = _errors(_validated_node(monkeypatch, "{inputs}/clip.mp4", duration=12.0))
 
         assert len(errors) == 1
         assert isinstance(errors[0], NodeError)
