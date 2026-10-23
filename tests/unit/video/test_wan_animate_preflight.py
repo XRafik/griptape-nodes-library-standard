@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
 from griptape_nodes.exe_types import input_checks
 from griptape_nodes.exe_types.core_types import NodeError
-from griptape_nodes.exe_types.input_checks import ImageInfo, VideoProbe
+from griptape_nodes.exe_types.input_checks import ImageInfo, VideoProbe, input_check_readings
+from griptape_nodes.exe_types.pre_run_validation import run_pre_run_validators
 from PIL import Image
 
 from griptape_nodes_library.video.wan_animate_generation import WanAnimateGeneration
@@ -32,7 +32,7 @@ def video(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         "seconds": 5.0,
         "mime_type": "video/mp4",
     }
-    # video_errors probes through the engine's own reader, so patch it there.
+    # The validators probe through the engine's own reader, so patch it there.
     monkeypatch.setattr(
         input_checks,
         "local_video_probe",
@@ -47,14 +47,30 @@ def _image(tmp_path: Path, size: tuple[int, int] = (800, 600), image_format: str
     return str(path)
 
 
+def _all_errors(node: WanAnimateGeneration) -> list[Exception]:
+    """What the engine reports at the node's turn: its pre-run validators', then its own checks'."""
+    with input_check_readings():
+        return [*run_pre_run_validators(node), *(node.validate_before_node_run() or [])]
+
+
 def _messages(node: WanAnimateGeneration) -> list[str]:
-    return [str(e) for e in node.validate_before_node_run() or [] if isinstance(e, NodeError)]
+    return [str(e) for e in _all_errors(node) if isinstance(e, NodeError)]
+
+
+def _oversized(monkeypatch: pytest.MonkeyPatch, suffix: str) -> None:
+    """Make local files ending in `suffix` read as 1 GB, over each DashScope size limit, without writing one."""
+    read_size = input_checks._read_size_bytes
+    monkeypatch.setattr(
+        input_checks,
+        "_read_size_bytes",
+        lambda location: 1024**3 if location.endswith(suffix) else read_size(location),
+    )
 
 
 def test_accepts_inputs_within_every_limit(node: WanAnimateGeneration, tmp_path: Path, video: dict[str, Any]) -> None:
     node.set_parameter_value("image_url", _image(tmp_path, image_format="WEBP"))
     node.set_parameter_value("video_url", video["path"])
-    assert node.validate_before_node_run() is None
+    assert _all_errors(node) == []
 
 
 @pytest.mark.parametrize(
@@ -93,7 +109,7 @@ def test_rejects_an_unsupported_image_format(node: WanAnimateGeneration, tmp_pat
 def test_rejects_an_oversized_image(
     node: WanAnimateGeneration, tmp_path: Path, video: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(sys.modules[WanAnimateGeneration.__module__], "MAX_IMAGE_BYTES", 10)
+    _oversized(monkeypatch, ".png")
     node.set_parameter_value("image_url", _image(tmp_path))
     node.set_parameter_value("video_url", video["path"])
     messages = _messages(node)
@@ -122,7 +138,7 @@ def test_rejects_an_unsupported_video_format(node: WanAnimateGeneration, tmp_pat
 def test_rejects_an_oversized_video(
     node: WanAnimateGeneration, tmp_path: Path, video: dict[str, Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(sys.modules[WanAnimateGeneration.__module__], "MAX_VIDEO_BYTES", 1)
+    _oversized(monkeypatch, ".mp4")
     node.set_parameter_value("image_url", _image(tmp_path))
     node.set_parameter_value("video_url", video["path"])
     messages = _messages(node)
@@ -176,7 +192,7 @@ def test_skips_remote_inputs(node: WanAnimateGeneration, monkeypatch: pytest.Mon
     monkeypatch.setattr(subprocess, "run", lambda *_a, **_k: pytest.fail("a remote video must not be probed"))
     node.set_parameter_value("image_url", "https://example.com/source.gif")
     node.set_parameter_value("video_url", "https://example.com/reference.mp4")
-    assert node.validate_before_node_run() is None
+    assert _all_errors(node) == []
 
 
 @pytest.mark.parametrize(
@@ -189,7 +205,7 @@ def test_errors_link_the_selected_models_page(
     node.set_parameter_value("model", model)
     node.set_parameter_value("image_url", _image(tmp_path, image_format="GIF"))
     node.set_parameter_value("video_url", video["path"])
-    errors = [e for e in node.validate_before_node_run() or [] if isinstance(e, NodeError)]
+    errors = [e for e in _all_errors(node) if isinstance(e, NodeError)]
     assert len(errors) == 1
     assert errors[0].links
     assert errors[0].links[0].url.endswith(page)
