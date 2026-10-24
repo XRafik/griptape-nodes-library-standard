@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import sys
 from io import BytesIO
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -22,6 +23,9 @@ from PIL import Image
 from griptape_nodes_library.video import veo3_video_generation
 
 LIBRARY_NAME = "Griptape Nodes Library"
+# A real 64x48 HEIC photo, made with macOS's `sips -s format heic`. Pillow can't open it without a
+# plugin the engine doesn't install; the engine reads its format from its file signature.
+HEIC_PHOTO = Path(__file__).parent.parent / "fixtures" / "photo_64x48.heic"
 
 
 def _create(node_type: str, monkeypatch: pytest.MonkeyPatch) -> Any:
@@ -67,6 +71,10 @@ class TestGoogleImageGeneration:
 
     def test_accepts_supported_images(self, node: Any) -> None:
         node.set_parameter_value("input_images", [_image_uri("PNG"), _image_uri("JPEG"), _image_uri("WEBP")])
+        assert _all_errors(node) == []
+
+    def test_accepts_a_heic_photo(self, node: Any) -> None:
+        node.set_parameter_value("input_images", [str(HEIC_PHOTO)])
         assert _all_errors(node) == []
 
     def test_rejects_too_many_images(self, node: Any) -> None:
@@ -172,6 +180,16 @@ class TestVeo3VideoGeneration:
         assert errors[0].links
         assert errors[0].links[0].url == veo3_video_generation.REFERENCE_IMAGES_URL
 
+    @pytest.mark.parametrize("parameter", ["start_frame", "reference_images"])
+    def test_rejects_a_heic_photo_by_its_real_format(self, node: Any, parameter: str) -> None:
+        if parameter == "reference_images":
+            node.set_parameter_value(parameter, [str(HEIC_PHOTO)])
+            expected = "Image 1 in 'reference images' is in HEIC format. Convert it to JPEG or PNG."
+        else:
+            node.set_parameter_value(parameter, str(HEIC_PHOTO))
+            expected = "The image in 'start frame' is in HEIC format. Convert it to JPEG or PNG."
+        assert [str(e) for e in _node_errors(node)] == [expected]
+
     def test_checks_only_the_style_reference_the_request_sends(self, node: Any) -> None:
         node.set_parameter_value("reference_type", "style")
         node.set_parameter_value("reference_images", [_image_uri("PNG"), _image_uri("GIF")])
@@ -195,6 +213,10 @@ class TestGeminiOmniFlashGeneration:
         assert [str(e) for e in errors] == [
             "Image 1 in 'reference images' is in GIF format. Convert it to PNG, JPEG, WEBP, HEIC or HEIF."
         ]
+
+    def test_accepts_a_heic_reference_photo(self, node: Any) -> None:
+        node.set_parameter_value("reference_images", [str(HEIC_PHOTO)])
+        assert _all_errors(node) == []
 
     def test_rejects_an_unsupported_deprecated_image(self, node: Any) -> None:
         node.set_parameter_value("image", _image_uri("GIF"))

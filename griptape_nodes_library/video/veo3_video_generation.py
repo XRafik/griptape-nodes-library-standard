@@ -11,7 +11,7 @@ from typing import Any, ClassVar
 from griptape.artifacts import ImageArtifact, ImageUrlArtifact
 from griptape.artifacts.video_url_artifact import VideoUrlArtifact
 from griptape_nodes.exe_types.core_types import NodeError, Parameter, ParameterGroup, ParameterList, ParameterMode
-from griptape_nodes.exe_types.input_checks import check_mime_type, check_size, input_subject, local_image_info
+from griptape_nodes.exe_types.input_checks import check_mime_type, check_size, input_subject, local_image_format
 from griptape_nodes.exe_types.node_types import BaseNode
 from griptape_nodes.exe_types.param_components.model_access_component import ModelAccessComponent
 from griptape_nodes.exe_types.param_components.project_file_parameter import ProjectFileParameter
@@ -98,9 +98,8 @@ class SentReferenceImagesFormat(NodeValidator):
         sent = reference_images[: _max_reference_images(node.get_parameter_value("reference_type"))]
         errors: list[NodeError] = []
         for position, image in enumerate(sent, start=1):
-            info = local_image_info(image)
             error = check_mime_type(
-                info.mime_type if info else None,
+                local_image_format(image),
                 subject=input_subject("reference images", noun="image", position=position),
                 allowed=SUPPORTED_IMAGE_MIME_TYPES,
                 docs_url=REFERENCE_IMAGES_URL,
