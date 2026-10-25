@@ -311,7 +311,7 @@ export function createViewer({
     switch (e.key) {
       case "ArrowLeft":  e.preventDefault(); step(-1);        break;
       case "ArrowRight": e.preventDefault(); step(1);         break;
-      case " ":          e.preventDefault(); toggleCurrent(); break;
+      case " ":          e.preventDefault(); if (!e.repeat) toggleCurrent(); break;
       case "Escape":     e.preventDefault(); close();         break;
     }
   }
