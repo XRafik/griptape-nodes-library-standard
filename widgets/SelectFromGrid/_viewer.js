@@ -14,7 +14,7 @@
 // through the getters and asks the widget to change it through the callbacks,
 // then the widget calls refresh() so both views stay in step.
 //
-// createViewer(opts) → { open(idx), close(), refresh(), isOpen(), destroy() }
+// createViewer(opts) → { open(idx), close(), refresh(), destroy() }
 
 import { CARD_HUES } from './_styles.js';
 import { mkIcon } from './_icons.js';
@@ -178,6 +178,7 @@ export function createViewer({
     const thumb = document.createElement("div");
     thumb.className = "sfg-viewer-thumb" + (idx === current ? " current" : "");
     thumb.title = item.label || `Item ${idx + 1}`;
+    thumb.dataset.idx = String(idx);
 
     switch (item.type) {
       case "image": {
@@ -263,17 +264,28 @@ export function createViewer({
     selectBtn.appendChild(document.createTextNode(label));
     selectBtn.title = "Toggle selection (Space)";
 
-    stripItems.replaceChildren();
-    selected.forEach((idx) => {
-      if (items[idx]) stripItems.appendChild(mkThumb(items[idx], idx));
-    });
-
     if (!selected.length) {
       stripHint.textContent = multi ? "Nothing selected · press Space to select" : "Nothing selected";
     } else if (multi) {
       stripHint.textContent = `${selected.length} selected`;
     } else {
       stripHint.textContent = "Selected · selecting another item replaces it";
+    }
+  }
+
+  // Rebuilds every selected thumbnail. Only needed when the selection or items
+  // change, not when stepping.
+  function renderStrip() {
+    const items = getItems();
+    stripItems.replaceChildren();
+    getSelected().forEach((idx) => {
+      if (items[idx]) stripItems.appendChild(mkThumb(items[idx], idx));
+    });
+  }
+
+  function updateStripCurrent() {
+    for (const thumb of stripItems.children) {
+      thumb.classList.toggle("current", Number(thumb.dataset.idx) === current);
     }
   }
 
@@ -287,6 +299,7 @@ export function createViewer({
     current = next;
     if (changed) renderStage();
     renderChrome();
+    updateStripCurrent();
   }
 
   function step(delta) { show(current + delta); }
@@ -344,6 +357,7 @@ export function createViewer({
     }
     renderStage();
     renderChrome();
+    renderStrip();
     overlay.focus();
   }
 
@@ -369,13 +383,13 @@ export function createViewer({
       if (vid && items[current].thumbnail) vid.poster = items[current].thumbnail;
     }
     renderChrome();
+    renderStrip();
   }
 
   return {
     open: openAt,
     close,
     refresh,
-    isOpen: () => open,
     destroy: close,
   };
 }
