@@ -277,8 +277,10 @@ class SeedanceLimit(PreRunValidator):
     A private-asset reference is sent as an ``asset://`` ID, so no limit is checked on it. An image
     over SEEDANCE_MAX_IMAGE_DIMENSION_PX is downscaled and re-encoded as PNG or JPEG before the
     Seedance 2.0 and 2.5 nodes send it (see `SeedanceProxyNode._prepare_frame_url_async`), so for
-    one only the limits a resize keeps apply: the shortest side and the aspect ratio. Pass
-    `kept_on_downscale=False` for the others.
+    one only the limits a resize keeps are checked: the shortest side and the aspect ratio. Its
+    format and file size are those of the re-encoded copy, which isn't read until the node runs,
+    so they aren't checked here; a PNG kept as PNG can still be over BytePlus's size limit after
+    the resize, and BytePlus then refuses it. Pass `kept_on_downscale=False` for those limits.
 
     Args:
         limit: The engine validator to run.

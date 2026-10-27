@@ -47,6 +47,7 @@ INPUT_LIMITS_URL = "https://docs.byteplus.com/en/docs/ModelArk/1520757"
 HEIF_MODELS = ("seedance-1-5-pro-251215",)
 # The model this node uses when none is selected.
 DEFAULT_MODEL_ID = "seedance-1-5-pro-251215"
+# The models the dropdown offers; each one's frame limits are declared below.
 MODEL_IDS = ("seedance-1-5-pro-251215", "seedance-1-0-pro-250528", "seedance-1-0-pro-fast-251015")
 
 
@@ -129,7 +130,7 @@ class SeedanceVideoGeneration(GriptapeProxyNode):
         # INPUTS / PROPERTIES
         model_id_param = ParameterString(
             name="model_id",
-            default_value="seedance-1-5-pro-251215",
+            default_value=DEFAULT_MODEL_ID,
             tooltip="Model to use for video generation",
             allowed_modes={ParameterMode.INPUT, ParameterMode.PROPERTY},
             ui_options={
@@ -143,12 +144,8 @@ class SeedanceVideoGeneration(GriptapeProxyNode):
         self._model_access = ModelAccessComponent(
             node=self,
             parameter=model_id_param,
-            model_choices=[
-                "seedance-1-5-pro-251215",
-                "seedance-1-0-pro-250528",
-                "seedance-1-0-pro-fast-251015",
-            ],
-            default_model="seedance-1-5-pro-251215",
+            model_choices=list(MODEL_IDS),
+            default_model=DEFAULT_MODEL_ID,
             deprecated_values=self.LEGACY_MODEL_VALUES,
         )
 
@@ -272,7 +269,7 @@ class SeedanceVideoGeneration(GriptapeProxyNode):
         )
 
         # Set initial parameter visibility based on default model
-        self._update_parameter_visibility("seedance-1-5-pro-251215")
+        self._update_parameter_visibility(DEFAULT_MODEL_ID)
 
     def after_value_set(self, parameter: Parameter, value: Any) -> None:
         """Handle parameter value changes to show/hide dependent parameters based on model capabilities.
@@ -316,7 +313,7 @@ class SeedanceVideoGeneration(GriptapeProxyNode):
             logger.info(message)
 
     def _get_parameters(self) -> dict[str, Any]:
-        model_id = self.get_parameter_value("model_id") or "seedance-1-5-pro-251215"
+        model_id = self.get_parameter_value("model_id") or DEFAULT_MODEL_ID
 
         return {
             "prompt": self.get_parameter_value("prompt") or "",

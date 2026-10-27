@@ -691,9 +691,8 @@ class Seedance25VideoGeneration(SeedanceProxyNode):
         """Validate parameters before execution."""
         exceptions = super().validate_before_node_run() or []
 
-        params = self._get_parameters()
         try:
-            self._validate_parameters(params)
+            self._validate_parameters(self._get_parameters())
         except ValueError as e:
             exceptions.append(e)
 
