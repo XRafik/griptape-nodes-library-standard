@@ -59,11 +59,11 @@ def _messages(node: WanAnimateGeneration) -> list[str]:
 
 def _oversized(monkeypatch: pytest.MonkeyPatch, suffix: str) -> None:
     """Make local files ending in `suffix` read as 1 GB, over each DashScope size limit, without writing one."""
-    read_size = input_checks._read_size_bytes
+    read_size = input_checks.local_size_bytes
     monkeypatch.setattr(
         input_checks,
-        "_read_size_bytes",
-        lambda location: 1024**3 if location.endswith(suffix) else read_size(location),
+        "local_size_bytes",
+        lambda value, *, kind: 1024**3 if str(value).endswith(suffix) else read_size(value, kind=kind),
     )
 
 
