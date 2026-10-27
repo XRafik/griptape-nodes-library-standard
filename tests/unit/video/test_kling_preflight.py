@@ -151,16 +151,9 @@ class TestImageToVideo:
 
 class TestOmni:
     @pytest.fixture
-    def node(self, monkeypatch: pytest.MonkeyPatch) -> KlingOmniVideoGeneration:
+    def node(self) -> KlingOmniVideoGeneration:
         node = KlingOmniVideoGeneration(name="KlingOmni")
         node.set_parameter_value("prompt", "a cat")
-        # Engine 0.104 reads a ParameterList's items from its child rows, which a unit test never
-        # creates, so fall back to the value set on the list itself. Later engines keep the rows in
-        # step with the list, and the real reader returns it.
-        read_list = node.get_parameter_list_value
-        monkeypatch.setattr(
-            node, "get_parameter_list_value", lambda name: read_list(name) or node.parameter_values.get(name) or []
-        )
         return node
 
     def test_accepts_valid_media(self, node: KlingOmniVideoGeneration, tmp_path: Path, video: dict[str, Any]) -> None:
