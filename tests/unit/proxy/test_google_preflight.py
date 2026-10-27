@@ -75,7 +75,7 @@ class TestGoogleImageGeneration:
         errors = _node_errors(node)
         assert [str(e) for e in errors] == [
             "15 images are connected across 'Input Images', 'Object Images' and 'Human Images' and the limit is 14. "
-            "Remove 1 from 'Input Images'."
+            "Remove 1."
         ]
         assert errors[0].links
 

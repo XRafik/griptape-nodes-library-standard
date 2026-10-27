@@ -93,12 +93,7 @@ class GeminiInputImage(PreRunValidator):
 
 
 class TotalInputImages(NodeValidator):
-    """The most images Google takes across 'Input Images' and the deprecated image lists together.
-
-    'Input Images' holds at most the limit and the deprecated lists hold at most 11 images, so the
-    total goes over only with images in the deprecated lists, and 'Input Images' then always holds
-    some to remove.
-    """
+    """The most images Google takes across 'Input Images' and the deprecated image lists together."""
 
     def check(
         self,
@@ -112,7 +107,7 @@ class TotalInputImages(NodeValidator):
             return []
         msg = (
             f"{total_images} images are connected across 'Input Images', 'Object Images' and 'Human Images' "
-            f"and the limit is {MAX_INPUT_IMAGES}. Remove {total_images - MAX_INPUT_IMAGES} from 'Input Images'."
+            f"and the limit is {MAX_INPUT_IMAGES}. Remove {total_images - MAX_INPUT_IMAGES}."
         )
         links = [NodeErrorLink(label=LIMITS_LINK_LABEL, url=docs_url)] if docs_url else None
         return [NodeError(msg, links=links)]
