@@ -236,9 +236,8 @@ class GrokVideoEdit(GriptapeProxyNode):
         """Return a public URL for the video input, or None to fall back to a data URI.
 
         A local video is uploaded to Griptape Cloud so xAI can fetch it, keeping it out of the
-        request body. A public http(s) URL is passed through. The helper is built here rather than
-        in __init__ because it raises without a Griptape Cloud credential, which should cost the
-        upload, not the node.
+        request body. The helper is built here rather than in __init__ because it raises without a
+        Griptape Cloud credential, which should cost the upload, not the node.
         """
         try:
             if self._video_upload is None:
@@ -267,6 +266,11 @@ class GrokVideoEdit(GriptapeProxyNode):
         if not video_value:
             msg = "Video input has no usable value."
             raise ValueError(msg)
+
+        # xAI fetches a public URL itself, so it goes as is, without the upload helper, which
+        # can't be built without a Griptape Cloud credential.
+        if is_publicly_reachable_url(video_value):
+            return video_value
 
         public_url = await self._upload_video()
         if public_url:

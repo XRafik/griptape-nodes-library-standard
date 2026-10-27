@@ -309,6 +309,18 @@ class TestUpload:
         assert await node._prepare_video_url(node.get_parameter_value("video")) == public_url
         assert captured_paths == []
 
+    async def test_public_url_is_passed_through_without_cloud_credential(
+        self, monkeypatch: pytest.MonkeyPatch, captured_paths: list[str]
+    ) -> None:
+        monkeypatch.setattr(
+            public_artifact_url_parameter_module, "resolve_cloud_credential", lambda *_args, **_kwargs: None
+        )
+        public_url = "https://example.com/clip.mp4"
+        node = _uploading_node(video=public_url)
+
+        assert await node._prepare_video_url(node.get_parameter_value("video")) == public_url
+        assert captured_paths == []
+
     @pytest.mark.parametrize("run_fails", [False, True], ids=["success", "failure"])
     async def test_upload_is_deleted_after_the_run(self, monkeypatch: pytest.MonkeyPatch, *, run_fails: bool) -> None:
         deleted: list[bool] = []
