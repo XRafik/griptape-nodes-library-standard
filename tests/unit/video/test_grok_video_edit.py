@@ -126,16 +126,62 @@ class TestInputLimits:
             f"The video in 'Video' is in {format_name} format. Convert it to MP4."
         ]
 
-    def test_reads_the_format_from_the_file_not_its_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # An MP4 saved as .mov is an MP4, so xAI takes it.
-        assert _messages(_validated_node(monkeypatch, "{inputs}/IMG_2689.mov", mime_type="video/mp4")) == []
+    def test_refuses_an_mp4_not_named_mp4(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # xAI requires the .mp4 extension and fails an MP4 saved as .mov with no reason.
+        errors = _errors(_validated_node(monkeypatch, "{inputs}/IMG_2689.mov", mime_type="video/mp4"))
+
+        assert [str(error) for error in errors] == [
+            "The video in 'Video' is named 'IMG_2689.mov', and xAI only accepts a file whose name ends in .mp4. "
+            "If it's already an MP4, rename it to end in .mp4; otherwise convert it to MP4."
+        ]
+        assert isinstance(errors[0], NodeError)
+        assert [link.url for link in errors[0].links or []] == [XAI_VIDEO_EDIT_DOCS_URL]
 
     @pytest.mark.parametrize(
         "video_input",
-        ["https://example.com/clip.webm?sig=1", "data:video/quicktime;base64,ABC"],
+        [
+            "{inputs}/CLIP.MP4",
+            "https://example.com/clip.Mp4?sig=a.mov",
+            "https://cloud.griptape.ai/api/buckets/b/signed/abc123?sig=1",
+            "{inputs}/clip",
+        ],
+        ids=["uppercase", "url-with-query", "url-without-extension", "path-without-extension"],
+    )
+    def test_passes_an_mp4_name_or_no_extension(self, monkeypatch: pytest.MonkeyPatch, video_input: str) -> None:
+        assert _messages(_validated_node(monkeypatch, video_input)) == []
+
+    def test_refuses_a_remote_url_not_named_mp4(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The real reader: it reads only files on this machine, so only the name is checked.
+        monkeypatch.setattr(subprocess, "run", lambda *_a, **_k: pytest.fail("ffprobe not run"))
+        node = GrokVideoEdit(name="GrokVideoEdit")
+        node.set_parameter_value("prompt", "make it snow")
+        node.set_parameter_value("video", "https://example.com/clip.webm?sig=1")
+
+        assert _messages(node) == [
+            "The video in 'Video' is named 'clip.webm', and xAI only accepts a file whose name ends in .mp4. "
+            "If it's already an MP4, rename it to end in .mp4; otherwise convert it to MP4."
+        ]
+
+    def test_passes_an_mp4_data_uri(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        assert _messages(_validated_node(monkeypatch, "data:video/mp4;base64,ABC", mime_type=None)) == []
+
+    def test_refuses_a_data_uri_not_typed_mp4(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        assert _messages(_validated_node(monkeypatch, "data:video/quicktime;base64,ABC", mime_type=None)) == [
+            "The video in 'Video' is a data URI that isn't typed video/mp4, which xAI requires. Convert it to MP4."
+        ]
+
+    def test_refuses_a_file_named_mp4_that_is_not_mp4(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Only the format error: converting the file to MP4 fixes both.
+        assert _messages(_validated_node(monkeypatch, "{inputs}/clip.mp4", mime_type="video/quicktime")) == [
+            "The video in 'Video' is in MOV format. Convert it to MP4."
+        ]
+
+    @pytest.mark.parametrize(
+        "video_input",
+        ["https://example.com/clip.mp4?sig=1", "data:video/mp4;base64,ABC"],
         ids=["url", "data-uri"],
     )
-    def test_leaves_a_video_it_cannot_read_locally_to_xai(
+    def test_leaves_the_contents_of_a_video_it_cannot_read_locally_to_xai(
         self, monkeypatch: pytest.MonkeyPatch, video_input: str
     ) -> None:
         # The real reader: it reads only files on this machine, so it returns nothing for these.
