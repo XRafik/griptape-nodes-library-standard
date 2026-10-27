@@ -126,7 +126,8 @@ return
 ## Media inputs
 
 Declare an image, video or audio input's provider limits on its parameter with
-`pre_run_validators=`, using the engine's `griptape_nodes.exe_types.validators`. The engine checks
+`pre_run_validators=`, using the engine's validators in `griptape_nodes.exe_types.validators.media`
+(and `MaxCount` or `ByParameter` from `griptape_nodes.exe_types.validators.common`). The engine checks
 them before the node runs, and their errors already follow this skill: they name the input by its
 display name, give the value and the limit, say how to fix it, and link the page
 `input_limits_url()` returns.
