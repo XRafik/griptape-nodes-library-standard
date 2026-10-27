@@ -69,11 +69,15 @@ class TestGoogleImageGeneration:
         node.set_parameter_value("input_images", [str(HEIC_PHOTO)])
         assert _all_errors(node) == []
 
-    def test_rejects_too_many_images(self, node: Any) -> None:
+    def test_rejects_too_many_images_across_the_image_lists(self, node: Any) -> None:
         node.set_parameter_value("input_images", [_image_uri()] * 10)
         node.set_parameter_value("object_images", [_image_uri()] * 5)
         errors = _node_errors(node)
-        assert [str(e) for e in errors] == ["15 images are connected to 'Input Images' and the limit is 14. Remove 1."]
+        assert [str(e) for e in errors] == [
+            "15 images are connected across 'Input Images', 'Object Images' and 'Human Images' and the limit is 14. "
+            "Remove 1 from 'Input Images'."
+        ]
+        assert errors[0].links
 
     @pytest.mark.parametrize(
         ("model", "url"),

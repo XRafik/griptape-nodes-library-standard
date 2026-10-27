@@ -10,8 +10,15 @@ from typing import Any, ClassVar
 
 from griptape.artifacts import ImageArtifact
 from griptape.artifacts.image_url_artifact import ImageUrlArtifact
-from griptape_nodes.exe_types.core_types import NodeError, Parameter, ParameterGroup, ParameterList, ParameterMode
-from griptape_nodes.exe_types.input_checks import check_count, check_mime_type, check_size
+from griptape_nodes.exe_types.core_types import (
+    NodeError,
+    NodeErrorLink,
+    Parameter,
+    ParameterGroup,
+    ParameterList,
+    ParameterMode,
+)
+from griptape_nodes.exe_types.input_checks import LIMITS_LINK_LABEL, check_mime_type, check_size
 from griptape_nodes.exe_types.node_types import BaseNode
 from griptape_nodes.exe_types.param_components.model_access_component import ModelAccessComponent
 from griptape_nodes.exe_types.param_components.project_file_parameter import ProjectFileParameter
@@ -86,7 +93,12 @@ class GeminiInputImage(PreRunValidator):
 
 
 class TotalInputImages(NodeValidator):
-    """The most images Google takes across 'Input Images' and the deprecated image lists together."""
+    """The most images Google takes across 'Input Images' and the deprecated image lists together.
+
+    'Input Images' holds at most the limit and the deprecated lists hold at most 11 images, so the
+    total goes over only with images in the deprecated lists, and 'Input Images' then always holds
+    some to remove.
+    """
 
     def check(
         self,
@@ -96,10 +108,14 @@ class TotalInputImages(NodeValidator):
         docs_url: str | None,
     ) -> list[NodeError]:
         total_images = sum(len(node.get_parameter_list_value(name) or []) for name in IMAGE_LIST_PARAMETERS)
-        error = check_count(
-            total_images, maximum=MAX_INPUT_IMAGES, parameter="Input Images", noun="images", docs_url=docs_url
+        if total_images <= MAX_INPUT_IMAGES:
+            return []
+        msg = (
+            f"{total_images} images are connected across 'Input Images', 'Object Images' and 'Human Images' "
+            f"and the limit is {MAX_INPUT_IMAGES}. Remove {total_images - MAX_INPUT_IMAGES} from 'Input Images'."
         )
-        return [error] if error else []
+        links = [NodeErrorLink(label=LIMITS_LINK_LABEL, url=docs_url)] if docs_url else None
+        return [NodeError(msg, links=links)]
 
 
 @dataclass
