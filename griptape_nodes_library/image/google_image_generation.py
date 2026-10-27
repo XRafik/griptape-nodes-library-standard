@@ -54,9 +54,9 @@ IMAGE_LIST_PARAMETERS = ("input_images", "object_images", "human_images")
 class GeminiInputImage(PreRunValidator):
     """An input image Google is certain to reject: a format it doesn't take, or over 7 MB.
 
-    With 'Auto Image Resize' on, an oversized image is re-encoded to WEBP before sending, so neither
-    its size nor its source format is checked. With it off, both are, and the size error says to
-    turn it on.
+    With 'Auto Image Resize' on, an oversized image Pillow can open is re-encoded to WEBP before
+    sending, so neither its size nor its source format is checked. Every other image is sent as it
+    is, so both are; the size error says to turn the setting on only when it is off.
     """
 
     needs = frozenset({MediaNeed.SIZE, MediaNeed.IMAGE})
@@ -68,18 +68,17 @@ class GeminiInputImage(PreRunValidator):
 
     def check(self, value: Any, *, subject: str, media: MediaInfo, docs_url: str | None) -> NodeError | None:  # noqa: ARG002
         size_bytes = media.size_bytes
-        if self.auto_image_resize and size_bytes is not None and size_bytes > MAX_IMAGE_SIZE_BYTES:
+        # 'Auto Image Resize' can only shrink an image Pillow opens; anything else is sent as it is.
+        can_resize = self.auto_image_resize and media.image is not None
+        if can_resize and size_bytes is not None and size_bytes > MAX_IMAGE_SIZE_BYTES:
             return None
         error = check_mime_type(media.mime_type, subject=subject, allowed=SUPPORTED_INPUT_MIME_TYPES, docs_url=docs_url)
-        if error is not None or self.auto_image_resize:
+        if error is not None or can_resize:
             return error
-        return check_size(
-            size_bytes,
-            maximum_bytes=MAX_IMAGE_SIZE_BYTES,
-            subject=subject,
-            fix="Turn on 'Auto Image Resize' or use a smaller image.",
-            docs_url=docs_url,
+        fix = (
+            "Use a smaller image." if self.auto_image_resize else "Turn on 'Auto Image Resize' or use a smaller image."
         )
+        return check_size(size_bytes, maximum_bytes=MAX_IMAGE_SIZE_BYTES, subject=subject, fix=fix, docs_url=docs_url)
 
 
 class TotalInputImages(NodeValidator):

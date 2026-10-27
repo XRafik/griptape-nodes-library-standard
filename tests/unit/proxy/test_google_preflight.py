@@ -135,6 +135,16 @@ class TestGoogleImageGeneration:
         node.set_parameter_value("input_images", [_image_uri("GIF")])
         assert _all_errors(node) == []
 
+    def test_rejects_an_oversized_image_auto_resize_cannot_open(
+        self, node: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(_node_module(node), "MAX_IMAGE_SIZE_BYTES", 10)
+        node.set_parameter_value("input_images", [str(HEIC_PHOTO)])
+        errors = _node_errors(node)
+        assert len(errors) == 1
+        assert str(errors[0]).startswith("Image 1 in 'Input Images' is ")
+        assert str(errors[0]).endswith("Use a smaller image.")
+
     def test_skips_a_remote_image(self, node: Any) -> None:
         node.set_parameter_value("input_images", ["https://example.com/image.gif"])
         assert _all_errors(node) == []
