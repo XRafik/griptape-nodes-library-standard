@@ -56,7 +56,8 @@ class GeminiInputImage(PreRunValidator):
 
     With 'Auto Image Resize' on, an oversized image Pillow can open is re-encoded to WEBP before
     sending, so neither its size nor its source format is checked. Every other image is sent as it
-    is, so both are; the size error says to turn the setting on only when it is off.
+    is, so both are; the size error suggests the setting only when it is off and could shrink the
+    image.
     """
 
     needs = frozenset({MediaNeed.SIZE, MediaNeed.IMAGE})
@@ -69,14 +70,17 @@ class GeminiInputImage(PreRunValidator):
     def check(self, value: Any, *, subject: str, media: MediaInfo, docs_url: str | None) -> NodeError | None:  # noqa: ARG002
         size_bytes = media.size_bytes
         # 'Auto Image Resize' can only shrink an image Pillow opens; anything else is sent as it is.
-        can_resize = self.auto_image_resize and media.image is not None
+        can_open = media.image is not None
+        can_resize = self.auto_image_resize and can_open
         if can_resize and size_bytes is not None and size_bytes > MAX_IMAGE_SIZE_BYTES:
             return None
         error = check_mime_type(media.mime_type, subject=subject, allowed=SUPPORTED_INPUT_MIME_TYPES, docs_url=docs_url)
         if error is not None or can_resize:
             return error
         fix = (
-            "Use a smaller image." if self.auto_image_resize else "Turn on 'Auto Image Resize' or use a smaller image."
+            "Turn on 'Auto Image Resize' or use a smaller image."
+            if can_open and not self.auto_image_resize
+            else "Use a smaller image."
         )
         return check_size(size_bytes, maximum_bytes=MAX_IMAGE_SIZE_BYTES, subject=subject, fix=fix, docs_url=docs_url)
 
