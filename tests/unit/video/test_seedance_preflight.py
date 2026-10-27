@@ -236,11 +236,29 @@ class TestSeedanceVideoGeneration:
         assert errors[0].links
         assert errors[0].links[0].url == SEEDANCE_INPUT_LIMITS_URL
 
-    def test_skips_a_frame_that_cannot_be_read(self, node: SeedanceVideoGeneration, tmp_path: Path) -> None:
+    @pytest.mark.parametrize(
+        ("model", "expected"),
+        [
+            (SEEDANCE_1_5_PRO, []),
+            (
+                SEEDANCE_1_0_PRO,
+                ["The image in 'First Frame' is in HEIC format. Convert it to JPEG, PNG, WEBP, BMP, TIFF or GIF."],
+            ),
+            (
+                SEEDANCE_1_0_PRO_FAST,
+                ["The image in 'First Frame' is in HEIC format. Convert it to JPEG, PNG, WEBP, BMP, TIFF or GIF."],
+            ),
+        ],
+    )
+    def test_checks_a_heic_frame_against_the_models_formats(
+        self, node: SeedanceVideoGeneration, tmp_path: Path, model: str, expected: list[str]
+    ) -> None:
+        # The engine reads a HEIC's format from its file signature, though it doesn't decode it.
         path = tmp_path / "first.heic"
         path.write_bytes(b"\x00\x00\x00\x18ftypheic\x00\x00\x00\x00")
+        node.set_parameter_value("model_id", model)
         node.set_parameter_value("first_frame", str(path))
-        assert _messages(node) == []
+        assert _messages(node) == expected
 
     def test_refuses_a_frame_of_exactly_30_mb(
         self, node: SeedanceVideoGeneration, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

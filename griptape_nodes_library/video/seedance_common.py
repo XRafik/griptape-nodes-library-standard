@@ -250,26 +250,28 @@ def downscale_oversized_image_data_uri(data_uri: str) -> DownscaledImage | None:
         return None
 
     # binascii.Error (a ValueError) for malformed base64; UnidentifiedImageError (an OSError) for
-    # formats PIL cannot decode, e.g. HEIC; OSError for truncated image data.
+    # formats PIL cannot decode, e.g. HEIC; OSError for truncated image data; DecompressionBombError
+    # for an image over Pillow's pixel limit, which the pre-run checks can't read either.
     try:
         raw_bytes = base64.b64decode(encoded)
         with Image.open(io.BytesIO(raw_bytes)) as decoded_image:
             return _downscale_decoded_image(decoded_image)
-    except (OSError, ValueError):
+    except (OSError, ValueError, Image.DecompressionBombError):
         return None
 
 
 def downscale_oversized_image_file(path: str) -> DownscaledImage | None:
     """Downscale an image file whose width or height exceeds SEEDANCE_MAX_IMAGE_DIMENSION_PX.
 
-    Returns None when no downscale is needed or the path is not an image PIL can open. Opening
+    Returns None when no downscale is needed or the path is not an image PIL will open (including
+    one over its decompression-bomb pixel limit, which is sent as it is). Opening
     reads only the image header, so measuring a file that turns out to be within the cap does not
     read it into memory.
     """
     try:
         with Image.open(path) as decoded_image:
             return _downscale_decoded_image(decoded_image)
-    except (OSError, ValueError):
+    except (OSError, ValueError, Image.DecompressionBombError):
         return None
 
 

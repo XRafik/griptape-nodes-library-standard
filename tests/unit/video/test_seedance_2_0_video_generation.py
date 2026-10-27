@@ -555,6 +555,28 @@ async def test_oversized_external_static_url_reference_image_is_downscaled_not_u
 
 
 @pytest.mark.asyncio
+async def test_image_over_pillows_pixel_limit_is_uploaded_as_it_is(
+    monkeypatch: pytest.MonkeyPatch, upload_env, tmp_path
+) -> None:
+    # Pillow refuses to open an image over its decompression-bomb limit, so the pre-run checks
+    # can't read it and the node can't downscale it; it goes up unchanged for the provider to judge
+    # rather than failing the run with Pillow's "decompression bomb DOS attack" message. Lowering
+    # the limit stands in for a ~180 MP file.
+    reference_image = tmp_path / "huge.png"
+    Image.new("RGB", (6500, 500)).save(reference_image, format="PNG")
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 1000)
+    node = _multimodal_node_with_reference_images([ImageUrlArtifact(str(reference_image))])
+
+    payload = await node._build_payload()
+    image_entries = [item for item in payload["content"] if item["type"] == "image_url"]
+
+    assert image_entries == [
+        {"type": "image_url", "image_url": {"url": upload_env.signed_url}, "role": "reference_image"}
+    ]
+    assert len(upload_env.uploaded_keys) == 1
+
+
+@pytest.mark.asyncio
 async def test_private_asset_accepts_a_public_http_url(upload_env) -> None:
     # Provider asset registration needs a URL the provider can fetch, and plain http on a real
     # domain qualifies. Requiring https here rejected an input that registers fine, because the
