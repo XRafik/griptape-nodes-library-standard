@@ -406,18 +406,6 @@
                 "provider_model_id": "gpt-image-2.5-flare",
                 "key_support": "SUPPORTS_CUSTOMER_KEY_OR_GRIPTAPE_KEY"
               },
-              "gtc_sora_2": {
-                "display_name": "Sora 2",
-                "family": "Sora",
-                "provider_model_id": "sora-2",
-                "key_support": "SUPPORTS_CUSTOMER_KEY_OR_GRIPTAPE_KEY"
-              },
-              "gtc_sora_2_pro": {
-                "display_name": "Sora 2 Pro",
-                "family": "Sora",
-                "provider_model_id": "sora-2-pro",
-                "key_support": "SUPPORTS_CUSTOMER_KEY_OR_GRIPTAPE_KEY"
-              },
               "gtc_whisper_1": {
                 "display_name": "Whisper 1",
                 "family": "Whisper",
@@ -3126,44 +3114,6 @@
             "type": "model_usage",
             "model_ids": [
               "gtc_kling_motion_control"
-            ]
-          }
-        ]
-      }
-    },
-    {
-      "class_name": "SoraVideoGeneration",
-      "file_path": "griptape_nodes_library/video/sora_video_generation.py",
-      "metadata": {
-        "category": "video",
-        "description": "Deprecated: OpenAI removes Sora 2 on 24 September 2026. Migrate to Veo 3.1 or Seedance 2.0 video generation.",
-        "display_name": "Sora 2 Video Generation",
-        "icon": "Sparkles",
-        "group": "create",
-        "tags": [
-          "video",
-          "generation",
-          "ai",
-          "api",
-          "sora",
-          "openai",
-          "retired",
-          "deprecated"
-        ],
-        "deprecation": {
-          "deprecation_message": "OpenAI removes the Videos API and all Sora 2 models on 24 September 2026 without naming a successor. Open the node and use its migrate buttons to rebuild it as Veo 3.1 Video Generation or Seedance 2.0 Video Generation, carrying over values and connections.",
-          "removal_version": "0.88.0"
-        },
-        "declarations": [
-          {
-            "type": "lifecycle_stage",
-            "stage": "DEPRECATED"
-          },
-          {
-            "type": "model_usage",
-            "model_ids": [
-              "gtc_sora_2",
-              "gtc_sora_2_pro"
             ]
           }
         ]
