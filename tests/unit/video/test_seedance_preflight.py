@@ -11,13 +11,20 @@ import pytest
 from griptape_nodes.exe_types import input_checks
 from griptape_nodes.exe_types.core_types import NodeError, ParameterList
 from griptape_nodes.exe_types.input_checks import AudioProbe, ImageInfo, VideoProbe, input_check_readings
+from griptape_nodes.exe_types.param_types.parameter_audio import ParameterAudio
 from griptape_nodes.exe_types.pre_run_validation import run_pre_run_validators
+from griptape_nodes.exe_types.validators.common import ByParameter
 from PIL import Image
 
 from griptape_nodes_library.assets import ASSET_KIND_IMAGE, ASSET_KIND_VIDEO, create_provider_asset_reference
 from griptape_nodes_library.video.seedance_2_0_video_generation import Seedance20VideoGeneration
 from griptape_nodes_library.video.seedance_2_5_video_generation import Seedance25VideoGeneration, SeedanceTask
-from griptape_nodes_library.video.seedance_common import MAX_IMAGE_BYTES, SEEDANCE_INPUT_LIMITS_URL
+from griptape_nodes_library.video.seedance_common import (
+    MAX_IMAGE_BYTES,
+    SEEDANCE_INPUT_LIMITS_URL,
+    SEEDANCE_SENT_IMAGE_LIMITS,
+    seedance_reference_video_limits,
+)
 from griptape_nodes_library.video.seedance_video_generation import SeedanceVideoGeneration
 
 SEEDANCE_1_5_PRO = "seedance-1-5-pro-251215"
@@ -123,6 +130,18 @@ def videos(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, VideoPr
     for name in ("a.mp4", "b.mp4", "c.mp4"):
         (tmp_path / name).write_bytes(b"video")
     return probes
+
+
+@pytest.mark.parametrize(
+    "limits",
+    [seedance_reference_video_limits(min_seconds=2, max_seconds=15), SEEDANCE_SENT_IMAGE_LIMITS],
+    ids=["video limits", "image limits"],
+)
+def test_refuses_limits_on_a_parameter_of_another_kind(limits: tuple[Any, ...]) -> None:
+    # Each limit declares what it reads, so the engine refuses it where it could never fire, even
+    # behind the ByParameter the nodes pick their limits with.
+    with pytest.raises(TypeError, match="parameter holds audio"):
+        ParameterAudio(name="reference_audio", pre_run_validators=[ByParameter("mode", {"a": list(limits)})])
 
 
 class TestSeedanceVideoGeneration:

@@ -292,14 +292,14 @@ class SeedanceLimit(PreRunValidator):
         kept_on_downscale: Whether the limit still applies to an image the node downscales.
     """
 
-    # Whatever `limit` reads: the file size, and the reading of the kind the parameter holds.
-    needs = frozenset({MediaNeed.SIZE, MediaNeed.IMAGE, MediaNeed.VIDEO, MediaNeed.AUDIO})
-
     limit: PreRunValidator
     kept_on_downscale: bool = True
 
-    def candidates(self) -> Sequence[PreRunValidator]:
-        return (self.limit,)
+    def __post_init__(self) -> None:
+        # What `limit` reads, so the engine refuses it on a parameter of the wrong kind; a limit
+        # skipped on a downscaled image also reads the image, to tell whether it is downscaled.
+        needs = self.limit.needs if self.kept_on_downscale else self.limit.needs | {MediaNeed.IMAGE}
+        object.__setattr__(self, "needs", needs)
 
     def check(self, value: Any, *, subject: str, media: MediaInfo, docs_url: str | None) -> NodeError | None:
         if is_provider_asset_reference(value):
