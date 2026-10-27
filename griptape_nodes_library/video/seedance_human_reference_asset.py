@@ -72,7 +72,7 @@ class SeedanceHumanReferenceAsset(DataNode):
     """
 
     # Caches the badge the editor shows; process() looks the asset up itself.
-    attributes_outside_parameters = frozenset({"_access"})
+    attributes_outside_parameters = frozenset({"_access", "_access_probed"})
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)

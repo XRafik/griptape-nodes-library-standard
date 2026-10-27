@@ -4,7 +4,6 @@ from typing import Any
 
 from griptape_nodes.exe_types.core_types import Parameter, ParameterMessage
 from griptape_nodes.exe_types.param_types.parameter_bool import ParameterBool
-from griptape_nodes.retained_mode.griptape_nodes import GriptapeNodes
 from griptape_nodes.traits.button import Button
 
 from griptape_nodes_library.proxy.proxy_api_key_providers import ProxyApiKeyProviderConfig
@@ -101,7 +100,7 @@ class ProxyAuthProviderParameter:
         return self._get_secret(self.secret_name)
 
     def _check_secret_set(self, secret_name: str) -> bool:
-        secret_value = GriptapeNodes.SecretsManager().get_secret(secret_name)
+        secret_value = get_secret(secret_name, error_on_missing=False)
         if secret_value is None:
             return False
         if isinstance(secret_value, str):

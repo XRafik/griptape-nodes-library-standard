@@ -55,6 +55,9 @@ SUBFLOW_WORKFLOW_KEY = "_subflow_workflow"
 
 
 class SubflowWorkflowNode(SuccessFailureNode):
+    # Markers of an unmigrated legacy subflow, read from the metadata at creation and cleared once claimed.
+    attributes_outside_parameters = frozenset({"_legacy_workflow", "_legacy_flow_name"})
+
     def __init__(self, name: str, metadata: dict[Any, Any] | None = None) -> None:
         super().__init__(name, metadata)
 
