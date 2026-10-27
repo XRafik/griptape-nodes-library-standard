@@ -424,7 +424,7 @@ BaseProxyNode automatically adds the model field to the request.
 
 ### Validation Patterns
 
-Declare media inputs' provider limits on their parameters with `pre_run_validators=`, using the engine's validators in `griptape_nodes.exe_types.validators`. The engine checks them before the node runs, reads each input once, and names each input by its display name in the error. Override `input_limits_url()` to return the docs page the errors link to:
+Declare media inputs' provider limits on their parameters with `pre_run_validators=`, using the engine's validators in `griptape_nodes.exe_types.validators.media` and `griptape_nodes.exe_types.validators.common`. The engine checks them before the node runs, reads each input once, and names each input by its display name in the error. Override `input_limits_url()` to return the docs page the errors link to:
 
 ```python
 from griptape_nodes.exe_types.core_types import ParameterList
