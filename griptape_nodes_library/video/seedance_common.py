@@ -126,8 +126,11 @@ _ASSET_KIND_ARTIFACT_TYPES = {
 # locally is downscaled to fit before it is sent, matching what 2.0 already does server-side.
 SEEDANCE_MAX_IMAGE_DIMENSION_PX = 6000
 
-# BytePlus's image limits, the same for every Seedance model unless noted, from "Create a video
-# generation task" (content > Image). The Seedance 2.5 tutorial repeats them.
+# BytePlus states the input limits of every Seedance model on one page, "Create a video generation
+# task" (content > Image / Video / Audio); the Seedance 2.5 tutorial repeats them.
+SEEDANCE_INPUT_LIMITS_URL = "https://docs.byteplus.com/en/docs/ModelArk/1520757"
+
+# BytePlus's image limits, the same for every Seedance model unless noted.
 # "Format: jpeg, png, webp, bmp, tiff, or gif. Seedance 1.5 pro and later models also
 # support heic and heif."
 SUPPORTED_IMAGE_MIME_TYPES = ("image/jpeg", "image/png", "image/webp", "image/bmp", "image/tiff", "image/gif")
@@ -530,6 +533,9 @@ class SeedanceProxyNode(GriptapeProxyNode, ABC):
         # finally blocks so they don't accumulate on the node across runs.
         self._pending_asset_uploads: list[tuple[PublicArtifactUrlParameter, str]] = []
 
+    def input_limits_url(self) -> str | None:
+        return SEEDANCE_INPUT_LIMITS_URL
+
     # --- Media preparation ------------------------------------------------------------------
 
     async def _prepare_frame_url_async(self, frame_input: Any, *, frame_label: str) -> str | None:
@@ -585,9 +591,11 @@ class SeedanceProxyNode(GriptapeProxyNode, ABC):
     def _downscale_local_image_if_oversized(self, image_url: str, *, label: str) -> str | None:
         """Return a downscaled data URI for a local image that exceeds the provider's dimension cap.
 
-        A plain path or an engine macro path (Load Image's output for a file in the project) is
-        resolved to its file the same way the pre-run checks read it, so an image those checks let
-        through as one the node downscales is downscaled here.
+        A plain path, an engine macro path (Load Image's output for a file in the project), or a
+        localhost static-server URL for a file inside or outside the workspace is resolved to its
+        file the same way the pre-run checks read it, so an image those checks let through as one
+        the node downscales is downscaled here. A static-server URL on this machine's LAN address
+        is mapped first, by `_local_path_for_static_server_url`.
 
         Returns None when the image is within limits, or when the value does not resolve to a file
         on this machine (a data URI, a remote URL, a macro with no project to resolve against) --
@@ -597,15 +605,15 @@ class SeedanceProxyNode(GriptapeProxyNode, ABC):
         if image_url.startswith("data:"):
             return None
 
+        local_path = None
         if image_url.startswith(("http://", "https://")):
             local_path = self._local_path_for_static_server_url(image_url)
-        else:
+        if local_path is None:
+            # A remote URL resolves to itself, which the downscale can't open, so it returns None.
             try:
                 local_path = File(image_url).resolve()
             except FileLoadError:
                 return None
-        if not local_path:
-            return None
 
         downscaled = downscale_oversized_image_file(local_path)
         if downscaled is None:

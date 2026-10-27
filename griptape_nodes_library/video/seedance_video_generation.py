@@ -27,6 +27,7 @@ from griptape_nodes_library.video.seedance_common import (
     HEIF_IMAGE_MIME_TYPES,
     MAX_IMAGE_BYTES,
     MIN_IMAGE_SIDE,
+    SEEDANCE_INPUT_LIMITS_URL,
     SEEDANCE_MAX_IMAGE_DIMENSION_PX,
     SUPPORTED_IMAGE_MIME_TYPES,
     TALLEST_ASPECT_RATIO,
@@ -40,9 +41,6 @@ __all__ = ["SeedanceVideoGeneration"]
 # The models that send a Last Frame; Seedance 1.0 Pro Fast takes a first frame only.
 LAST_FRAME_MODELS = ("seedance-1-5-pro-251215", "seedance-1-0-pro-250528")
 
-# BytePlus documents every model this node offers on one page, which states the image limits in
-# seedance_common: "Create a video generation task" (content > Image).
-INPUT_LIMITS_URL = "https://docs.byteplus.com/en/docs/ModelArk/1520757"
 # "Seedance 1.5 pro and later models also support heic and heif."
 HEIF_MODELS = ("seedance-1-5-pro-251215",)
 # The model this node uses when none is selected.
@@ -299,7 +297,7 @@ class SeedanceVideoGeneration(GriptapeProxyNode):
             self.hide_parameter_by_name("generate_audio")
 
     def input_limits_url(self) -> str | None:
-        return INPUT_LIMITS_URL
+        return SEEDANCE_INPUT_LIMITS_URL
 
     def _get_api_model_id(self) -> str:
         """Get the API model ID for this generation.

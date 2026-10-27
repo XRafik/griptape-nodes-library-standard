@@ -58,9 +58,7 @@ SEEDANCE_2_0_MODEL_ID = "dreamina-seedance-2-0-260128"
 SEEDANCE_2_0_FAST_MODEL_ID = "dreamina-seedance-2-0-fast-260128"
 SEEDANCE_2_0_MINI_MODEL_ID = "dreamina-seedance-2-0-mini-260615"
 
-# BytePlus documents the input limits of all three Seedance 2.0 models on one page, "Create a video
-# generation task" (content > Image / Video / Audio); seedance_common holds the shared ones.
-INPUT_LIMITS_URL = "https://docs.byteplus.com/en/docs/ModelArk/1520757"
+# The Seedance 2.0 limits from SEEDANCE_INPUT_LIMITS_URL; seedance_common holds the shared ones.
 # "Dreamina Seedance 2.0 series: Each video must be 2–15 seconds long. You can submit up to 3
 # reference videos with a total duration of no more than 15 seconds."
 MIN_REFERENCE_VIDEO_SECONDS = 2
@@ -617,9 +615,6 @@ class Seedance20VideoGeneration(SeedanceProxyNode):
             )
 
         return exceptions if exceptions else None
-
-    def input_limits_url(self) -> str | None:
-        return INPUT_LIMITS_URL
 
     def _get_parameters(self) -> dict[str, Any]:
         model_id = self.get_parameter_value("model_id") or MODEL_NAME_SEEDANCE_2_0

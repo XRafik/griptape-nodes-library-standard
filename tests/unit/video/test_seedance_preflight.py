@@ -17,13 +17,12 @@ from PIL import Image
 from griptape_nodes_library.assets import ASSET_KIND_IMAGE, ASSET_KIND_VIDEO, create_provider_asset_reference
 from griptape_nodes_library.video.seedance_2_0_video_generation import Seedance20VideoGeneration
 from griptape_nodes_library.video.seedance_2_5_video_generation import Seedance25VideoGeneration, SeedanceTask
-from griptape_nodes_library.video.seedance_common import MAX_IMAGE_BYTES
+from griptape_nodes_library.video.seedance_common import MAX_IMAGE_BYTES, SEEDANCE_INPUT_LIMITS_URL
 from griptape_nodes_library.video.seedance_video_generation import SeedanceVideoGeneration
 
 SEEDANCE_1_5_PRO = "seedance-1-5-pro-251215"
 SEEDANCE_1_0_PRO = "seedance-1-0-pro-250528"
 SEEDANCE_1_0_PRO_FAST = "seedance-1-0-pro-fast-251015"
-CREATE_TASK_PAGE = "https://docs.byteplus.com/en/docs/ModelArk/1520757"
 
 
 def _image(tmp_path: Path, size: tuple[int, int] = (1280, 720), image_format: str = "PNG", name: str = "") -> str:
@@ -235,7 +234,7 @@ class TestSeedanceVideoGeneration:
         node.set_parameter_value("first_frame", _image(tmp_path, image_format="PPM"))
         errors = _errors(node)
         assert errors[0].links
-        assert errors[0].links[0].url == CREATE_TASK_PAGE
+        assert errors[0].links[0].url == SEEDANCE_INPUT_LIMITS_URL
 
     def test_skips_a_frame_that_cannot_be_read(self, node: SeedanceVideoGeneration, tmp_path: Path) -> None:
         path = tmp_path / "first.heic"
@@ -641,7 +640,7 @@ class TestSeedance20:
         _set_list(references, "reference_images", [_image(tmp_path, image_format="PPM")])
         errors = _errors(references)
         assert errors[0].links
-        assert errors[0].links[0].url == CREATE_TASK_PAGE
+        assert errors[0].links[0].url == SEEDANCE_INPUT_LIMITS_URL
 
 
 class TestSeedance25:
@@ -838,4 +837,4 @@ class TestSeedance25:
         _set_list(node, "reference_images", [_image(tmp_path, image_format="PPM")])
         errors = _errors(node)
         assert errors[0].links
-        assert errors[0].links[0].url == CREATE_TASK_PAGE
+        assert errors[0].links[0].url == SEEDANCE_INPUT_LIMITS_URL

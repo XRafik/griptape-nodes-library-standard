@@ -538,6 +538,23 @@ async def test_oversized_macro_path_reference_image_is_downscaled_not_uploaded(
 
 
 @pytest.mark.asyncio
+async def test_oversized_external_static_url_reference_image_is_downscaled_not_uploaded(upload_env, tmp_path) -> None:
+    # The static server serves a file outside the workspace at an `/external/` URL. The pre-run
+    # checks resolve it to the file, so the downscale has to as well.
+    reference_image = tmp_path / "huge.png"
+    Image.new("RGB", (6500, 500)).save(reference_image, format="PNG")
+    external_url = f"http://localhost:8124/external{reference_image.as_posix()}?v=1"
+    node = _multimodal_node_with_reference_images([ImageUrlArtifact(external_url)])
+
+    payload = await node._build_payload()
+    image_entries = [item for item in payload["content"] if item["type"] == "image_url"]
+
+    assert len(image_entries) == 1
+    assert image_entries[0]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert len(upload_env.uploaded_keys) == 0
+
+
+@pytest.mark.asyncio
 async def test_private_asset_accepts_a_public_http_url(upload_env) -> None:
     # Provider asset registration needs a URL the provider can fetch, and plain http on a real
     # domain qualifies. Requiring https here rejected an input that registers fine, because the

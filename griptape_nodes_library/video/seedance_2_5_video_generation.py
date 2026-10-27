@@ -54,10 +54,8 @@ MAX_REFERENCE_VIDEOS = 10
 MAX_REFERENCE_AUDIO = 10
 MAX_TOTAL_REFERENCE_ASSETS = 50
 
-# BytePlus states every Seedance 2.5 input limit on "Create a video generation task" (content >
-# Image / Video / Audio), which the Seedance 2.5 tutorial repeats; seedance_common holds the ones
-# shared with Seedance 2.0.
-INPUT_LIMITS_URL = "https://docs.byteplus.com/en/docs/ModelArk/1520757"
+# The Seedance 2.5 limits from SEEDANCE_INPUT_LIMITS_URL; seedance_common holds the ones shared
+# with Seedance 2.0.
 # "Non-video-editing tasks: Each video must be 2–30 seconds long." "Video editing tasks: Each video
 # must be 4–30 seconds long." "You can submit up to 10 reference videos with a total duration of no
 # more than 30 seconds."
@@ -697,9 +695,6 @@ class Seedance25VideoGeneration(SeedanceProxyNode):
             exceptions.append(e)
 
         return exceptions if exceptions else None
-
-    def input_limits_url(self) -> str | None:
-        return INPUT_LIMITS_URL
 
     def _get_parameters(self) -> dict[str, Any]:
         first_frame = normalize_artifact_input(
