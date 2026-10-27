@@ -41,8 +41,12 @@ class Mp4FileName(PreRunValidator):
     """xAI's rule that a video's name ends in .mp4, or that a data URI is typed video/mp4.
 
     xAI fails a job whose video URL ends in another extension, even for an MP4 saved as .mov, and
-    gives no reason. The node keeps the file's name on the way to xAI: the uploaded URL ends in it,
-    and an inline video is typed from it. A name with no extension, such as a signed URL, passes.
+    gives no reason. The file's name normally reaches xAI intact: the uploaded URL ends in it, and
+    an inline video is typed from it. A name with no extension, such as a signed URL, passes.
+
+    The exception is a local name containing '#' or '?': the engine's upload currently cuts the
+    name at that character, so 'Take #2.mp4' passes here but is uploaded as 'Take '
+    (griptape-ai/griptape-nodes-engine#6048).
     """
 
     needs = frozenset({MediaNeed.VIDEO})
