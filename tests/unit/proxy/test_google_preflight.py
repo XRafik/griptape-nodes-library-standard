@@ -28,16 +28,8 @@ LIBRARY_NAME = "Griptape Nodes Library"
 HEIC_PHOTO = Path(__file__).parent.parent / "fixtures" / "photo_64x48.heic"
 
 
-def _create(node_type: str, monkeypatch: pytest.MonkeyPatch) -> Any:
-    node = LibraryRegistry.get_library(name=LIBRARY_NAME).create_node(node_type=node_type, name=node_type)
-    # Engine 0.104 reads a ParameterList's items from its child rows, which a unit test never
-    # creates, so fall back to the value set on the list itself. Later engines keep the rows in step
-    # with the list, and the real reader returns it.
-    read_list = node.get_parameter_list_value
-    monkeypatch.setattr(
-        node, "get_parameter_list_value", lambda name: read_list(name) or node.parameter_values.get(name) or []
-    )
-    return node
+def _create(node_type: str) -> Any:
+    return LibraryRegistry.get_library(name=LIBRARY_NAME).create_node(node_type=node_type, name=node_type)
 
 
 def _image_uri(image_format: str = "PNG", size: tuple[int, int] = (16, 16)) -> str:
@@ -64,8 +56,8 @@ def _node_errors(node: Any) -> list[NodeError]:
 
 class TestGoogleImageGeneration:
     @pytest.fixture
-    def node(self, griptape_nodes: GriptapeNodes, monkeypatch: pytest.MonkeyPatch) -> Any:  # noqa: ARG002
-        node = _create("GoogleImageGeneration", monkeypatch)
+    def node(self, griptape_nodes: GriptapeNodes) -> Any:  # noqa: ARG002
+        node = _create("GoogleImageGeneration")
         node.set_parameter_value("prompt", "a cat")
         return node
 
@@ -154,8 +146,8 @@ class TestGoogleImageGeneration:
 
 class TestVeo3VideoGeneration:
     @pytest.fixture
-    def node(self, griptape_nodes: GriptapeNodes, monkeypatch: pytest.MonkeyPatch) -> Any:  # noqa: ARG002
-        node = _create("Veo3VideoGeneration", monkeypatch)
+    def node(self, griptape_nodes: GriptapeNodes) -> Any:  # noqa: ARG002
+        node = _create("Veo3VideoGeneration")
         node.set_parameter_value("prompt", "a cat")
         return node
 
@@ -192,6 +184,11 @@ class TestVeo3VideoGeneration:
         assert errors[0].links
         assert errors[0].links[0].url == veo3_video_generation.REFERENCE_IMAGES_URL
 
+    def test_skips_reference_formats_on_a_model_that_takes_no_references(self, node: Any) -> None:
+        node.set_parameter_value("model_id", veo3_video_generation.ModelId.VEO_3_1_FAST_GENERATE_001.value)
+        node.set_parameter_value("reference_images", [_image_uri("GIF")])
+        assert not any("GIF format" in str(e) for e in _all_errors(node))
+
     @pytest.mark.parametrize("parameter", ["start_frame", "reference_images"])
     def test_rejects_a_heic_photo_by_its_real_format(self, node: Any, parameter: str) -> None:
         if parameter == "reference_images":
@@ -210,8 +207,8 @@ class TestVeo3VideoGeneration:
 
 class TestGeminiOmniFlashGeneration:
     @pytest.fixture
-    def node(self, griptape_nodes: GriptapeNodes, monkeypatch: pytest.MonkeyPatch) -> Any:  # noqa: ARG002
-        node = _create("GeminiOmniFlashGeneration", monkeypatch)
+    def node(self, griptape_nodes: GriptapeNodes) -> Any:  # noqa: ARG002
+        node = _create("GeminiOmniFlashGeneration")
         node.set_parameter_value("prompt", "a cat")
         return node
 

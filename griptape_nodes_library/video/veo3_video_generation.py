@@ -85,7 +85,11 @@ class VeoFrameImage(PreRunValidator):
 
 
 class SentReferenceImagesFormat(NodeValidator):
-    """The format of each reference image the request sends. It drops those past the reference type's maximum."""
+    """The format of each reference image the request sends.
+
+    Only Veo 3.1 takes reference images; on any other model the run is refused for having them, so
+    their format isn't checked. The request drops those past the reference type's maximum.
+    """
 
     def check(
         self,
@@ -94,6 +98,8 @@ class SentReferenceImagesFormat(NodeValidator):
         media: Mapping[str, Sequence[MediaInfo]],  # noqa: ARG002
         docs_url: str | None,  # noqa: ARG002
     ) -> list[NodeError]:
+        if (node.get_parameter_value("model_id") or ModelId.VEO_3_1_GENERATE_001) != ModelId.VEO_3_1_GENERATE_001:
+            return []
         reference_images = node.get_parameter_list_value("reference_images") or []
         sent = reference_images[: _max_reference_images(node.get_parameter_value("reference_type"))]
         errors: list[NodeError] = []
