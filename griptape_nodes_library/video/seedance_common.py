@@ -583,9 +583,14 @@ class SeedanceProxyNode(GriptapeProxyNode, ABC):
     def _downscale_local_image_if_oversized(self, image_url: str, *, label: str) -> str | None:
         """Return a downscaled data URI for a local image that exceeds the provider's dimension cap.
 
+        A plain path or an engine macro path (Load Image's output for a file in the project) is
+        resolved to its file the same way the pre-run checks read it, so an image those checks let
+        through as one the node downscales is downscaled here.
+
         Returns None when the image is within limits, or when the value does not resolve to a file
-        on this machine (a data URI, an engine macro path, a remote URL) -- those cases are capped
-        where their bytes are materialized, or reported on by the provider.
+        on this machine (a data URI, a remote URL, a macro with no project to resolve against) --
+        a data URI is capped where its bytes are materialized, and a remote URL is reported on by
+        the provider.
         """
         if image_url.startswith("data:"):
             return None
@@ -593,7 +598,10 @@ class SeedanceProxyNode(GriptapeProxyNode, ABC):
         if image_url.startswith(("http://", "https://")):
             local_path = self._local_path_for_static_server_url(image_url)
         else:
-            local_path = image_url
+            try:
+                local_path = File(image_url).resolve()
+            except FileLoadError:
+                return None
         if not local_path:
             return None
 

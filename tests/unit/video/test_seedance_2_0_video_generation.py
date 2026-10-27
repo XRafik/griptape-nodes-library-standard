@@ -512,6 +512,32 @@ async def test_oversized_file_reference_image_is_downscaled_not_uploaded(
 
 
 @pytest.mark.asyncio
+async def test_oversized_macro_path_reference_image_is_downscaled_not_uploaded(
+    monkeypatch: pytest.MonkeyPatch, upload_env, tmp_path
+) -> None:
+    # Load Image outputs a project macro path for a file in the project. The pre-run checks resolve
+    # it and skip the format and 30 MB limits on an image over 6000px because the node downscales
+    # it, so the downscale has to resolve the macro too, or the original goes up at full size.
+    reference_image = tmp_path / "huge.png"
+    Image.new("RGB", (6500, 500)).save(reference_image, format="PNG")
+    macro_path = "{inputs}/huge.png"
+    resolve = File.resolve
+
+    def resolve_inputs_macro(self: File) -> str:
+        return str(reference_image) if self.location == macro_path else resolve(self)
+
+    monkeypatch.setattr(File, "resolve", resolve_inputs_macro)
+    node = _multimodal_node_with_reference_images([ImageUrlArtifact(macro_path)])
+
+    payload = await node._build_payload()
+    image_entries = [item for item in payload["content"] if item["type"] == "image_url"]
+
+    assert len(image_entries) == 1
+    assert image_entries[0]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert len(upload_env.uploaded_keys) == 0
+
+
+@pytest.mark.asyncio
 async def test_private_asset_accepts_a_public_http_url(upload_env) -> None:
     # Provider asset registration needs a URL the provider can fetch, and plain http on a real
     # domain qualifies. Requiring https here rejected an input that registers fine, because the

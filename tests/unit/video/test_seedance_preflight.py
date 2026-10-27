@@ -56,7 +56,7 @@ def audio_clips(monkeypatch: pytest.MonkeyPatch) -> dict[str, AudioProbe | None]
         return probes.get(Path(str(value)).name, valid)
 
     # The validators probe through the engine's own reader, so patch it there.
-    monkeypatch.setattr(input_checks, "_probe_audio", fake_probe)
+    monkeypatch.setattr(input_checks, "local_audio_probe", fake_probe)
     return probes
 
 
@@ -72,21 +72,21 @@ def _errors(node: Any) -> list[NodeError]:
 
 def _file_size(monkeypatch: pytest.MonkeyPatch, suffix: str, size_bytes: int) -> None:
     """Make local files ending in `suffix` read as `size_bytes` long, without writing one that size."""
-    read_size = input_checks._read_size_bytes
+    read_size = input_checks.local_size_bytes
     monkeypatch.setattr(
         input_checks,
-        "_read_size_bytes",
-        lambda location: size_bytes if location.endswith(suffix) else read_size(location),
+        "local_size_bytes",
+        lambda value, *, kind: size_bytes if str(value).endswith(suffix) else read_size(value, kind=kind),
     )
 
 
 def _image_info(monkeypatch: pytest.MonkeyPatch, infos: dict[str, ImageInfo]) -> None:
     """Make the local images with these file names read as these sizes, without building ones that large."""
-    read_info = input_checks._read_image_info
+    read_info = input_checks.local_image_info
     monkeypatch.setattr(
         input_checks,
-        "_read_image_info",
-        lambda location: infos.get(Path(location).name) or read_info(location),
+        "local_image_info",
+        lambda value: infos.get(Path(str(value)).name) or read_info(value),
     )
 
 
@@ -120,7 +120,7 @@ def videos(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, VideoPr
         return probes.get(Path(str(value)).name, valid)
 
     # The validators probe through the engine's own reader, so patch it there.
-    monkeypatch.setattr(input_checks, "_probe_video", fake_probe)
+    monkeypatch.setattr(input_checks, "local_video_probe", fake_probe)
     for name in ("a.mp4", "b.mp4", "c.mp4"):
         (tmp_path / name).write_bytes(b"video")
     return probes

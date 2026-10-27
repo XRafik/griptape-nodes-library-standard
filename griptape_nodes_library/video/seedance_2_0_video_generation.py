@@ -182,8 +182,6 @@ class Seedance20VideoGeneration(SeedanceProxyNode):
         - result_details (str): Details about the result or error
     """
 
-    # Migrates values saved before the dropdown stored the provider's own model id: old
-    # display labels and catalog keys.
     node_validators: ClassVar[list[NodeValidator]] = [
         TotalDuration(
             REFERENCE_VIDEO_PARAMETERS,
@@ -200,6 +198,9 @@ class Seedance20VideoGeneration(SeedanceProxyNode):
             applies=_sends_references,
         ),
     ]
+
+    # Migrates values saved before the dropdown stored the provider's own model id: old
+    # display labels and catalog keys.
     LEGACY_MODEL_VALUES: ClassVar[dict[str, str]] = {
         "Seedance 2.0": MODEL_NAME_SEEDANCE_2_0,
         "Seedance 2.0 Fast": MODEL_NAME_SEEDANCE_2_0_FAST,
