@@ -47,6 +47,9 @@ END_FRAME_LIMITS = (
     SideRange(min=300),
 )
 START_FRAME_LIMITS = (*END_FRAME_LIMITS, AspectRatioRange("1:2.5", "2.5:1"))
+# Static Mask (`static_mask`): "same format requirements as image field". The page states only the
+# format for it, so only the format is checked.
+STATIC_MASK_LIMITS = (AllowedFormats("image/jpeg", "image/png"),)
 DEFAULT_DURATION_5S = 5
 MAX_MULTI_PROMPT_COUNT = 6
 V3_MODEL_ID = "kling-v3"
@@ -334,6 +337,7 @@ class KlingImageToVideoGeneration(GriptapeProxyNode):
                 tooltip="Static brush application area. Accepts ImageArtifact, ImageUrlArtifact, URL, or Base64.",
                 allowed_modes={ParameterMode.INPUT},
                 hide_property=True,
+                pre_run_validators=STATIC_MASK_LIMITS,
             )
             ParameterString(
                 name="dynamic_masks",
