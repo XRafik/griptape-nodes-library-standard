@@ -131,16 +131,18 @@ export default function VideoCapture(container, props) {
   ].join(";");
   recBadge.hidden = true;
 
-  // Shown when the camera streams but the microphone could not be opened
-  const micBadge = document.createElement("div");
+  // Shown when the camera streams but the microphone could not be opened; click to retry the mic
+  const micBadge = document.createElement("button");
   micBadge.style.cssText = [
     "position:absolute", "top:10px", "right:10px",
     "background:rgba(0,0,0,0.6)", "color:#fff",
     "font-size:11px", "padding:2px 8px",
-    "border-radius:4px", "pointer-events:none",
+    "border-radius:4px", "border:none", "cursor:pointer",
   ].join(";");
-  micBadge.textContent = "No microphone — recording video only";
+  micBadge.textContent = "No microphone — recording video only (retry)";
   micBadge.hidden = true;
+  micBadge.addEventListener("pointerdown", (e) => e.stopPropagation());
+  micBadge.addEventListener("mousedown",   (e) => e.stopPropagation());
 
   const retryBtn = mkOverlayBtn("rotate-ccw", "Retry");
   retryBtn.style.position = "absolute";
@@ -226,6 +228,7 @@ export default function VideoCapture(container, props) {
     reviewOverlay.hidden    = !hasRecording;
     recBadge.hidden         = !isRecording;
     micBadge.hidden         = !isStreaming || !micUnavailable;
+    micBadge.disabled       = isRecording;
     retryBtn.hidden         = !cameraFailed || isStreaming || hasRecording;
 
     const devicesLocked          = isRecording || hasRecording;
@@ -262,10 +265,10 @@ export default function VideoCapture(container, props) {
     } catch { /* permission not yet granted */ }
   }
 
-  async function switchDevices() {
+  async function switchDevices({ defaultMic = false } = {}) {
     if (isRecording || hasRecording) return;
     currentVideoId = videoSel.value;
-    currentAudioId = audioSel.value;
+    currentAudioId = defaultMic ? "" : audioSel.value;
     stream?.getTracks().forEach((t) => t.stop());
     stream = null;
     isStreaming = false;
@@ -289,6 +292,7 @@ export default function VideoCapture(container, props) {
     try {
       s = await navigator.mediaDevices.getUserMedia({ video: videoConstraint, audio: audioConstraint });
     } catch (avErr) {
+      if (seq !== _startSeq) return;
       try {
         // A previously selected microphone may have been unplugged; try the default one first.
         if (currentAudioId) {
@@ -444,6 +448,7 @@ export default function VideoCapture(container, props) {
   // ── Cleanup ───────────────────────────────────────────────────────────────
 
   function cleanup() {
+    _startSeq++; // a getUserMedia still in flight stops its tracks instead of attaching them
     clearInterval(timer);
     navigator.mediaDevices.removeEventListener("devicechange", populateDevices);
     if (recorder && recorder.state !== "inactive") { recorder.onstop = null; recorder.stop(); }
@@ -461,8 +466,9 @@ export default function VideoCapture(container, props) {
   acceptBtn.addEventListener("click",    accept);
   discardBtn.addEventListener("click",   discard);
   retryBtn.addEventListener("click",     retryCamera);
-  videoSel.addEventListener("change",    switchDevices);
-  audioSel.addEventListener("change",    switchDevices);
+  micBadge.addEventListener("click",     () => switchDevices({ defaultMic: true }));
+  videoSel.addEventListener("change",    () => switchDevices());
+  audioSel.addEventListener("change",    () => switchDevices());
   navigator.mediaDevices.addEventListener("devicechange", populateDevices);
 
   container._vcInst = { handleUpdate, cleanup, wrapper };
