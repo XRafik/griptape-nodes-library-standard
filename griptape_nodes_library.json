@@ -6884,7 +6884,11 @@
         "tags": [
           "data",
           "variable",
-          "workflow"
+          "workflow",
+          "teleport",
+          "postage stamp",
+          "stamp",
+          "set node"
         ]
       }
     },
@@ -6918,7 +6922,11 @@
         "tags": [
           "data",
           "variable",
-          "workflow"
+          "workflow",
+          "teleport",
+          "postage stamp",
+          "stamp",
+          "get node"
         ]
       }
     },
@@ -6934,7 +6942,11 @@
         "tags": [
           "data",
           "variable",
-          "workflow"
+          "workflow",
+          "teleport",
+          "postage stamp",
+          "stamp",
+          "set node"
         ]
       }
     },
